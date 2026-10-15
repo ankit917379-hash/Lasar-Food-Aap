@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 const API_BASE = window.location.hostname === 'localhost'
   ? 'http://localhost:5000'
-  : 'https://gg2sctgl-5000.inc1.devtunnels.ms';
+  : 'https://lasar-food-aap.onrender.com'; // <--- paste your copied Render URL here (no trailing slash)
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('customer');
