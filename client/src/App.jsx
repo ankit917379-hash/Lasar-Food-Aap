@@ -8,7 +8,6 @@ const ADMIN_EMAIL = 'ankit917379@gmail.com';
 const ADMIN_PHONE = '7379434080';
 const ADMIN_UPI = 'ankit917379@okhdfcbank';
 
-// High-resolution clean QR image matching your Google Pay UPI
 const ADMIN_QR_CODE_URL = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(`upi://pay?pa=${ADMIN_UPI}&pn=Ankit%20Ankit&cu=INR`);
 
 export default function App() {
@@ -17,12 +16,18 @@ export default function App() {
     const saved = localStorage.getItem('lasar_user');
     return saved ? JSON.parse(saved) : null;
   });
+
+  // Login & OTP State
   const [loginMethod, setLoginMethod] = useState('mobile'); // 'mobile' | 'gmail'
   const [loginPhone, setLoginPhone] = useState('');
   const [loginName, setLoginName] = useState('');
   const [loginEmail, setLoginEmail] = useState('');
+  const [otpStep, setOtpStep] = useState(false); // false: enter details, true: enter 6-digit code
+  const [enteredOtp, setEnteredOtp] = useState('');
+  const [otpNotice, setOtpNotice] = useState('');
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
 
-  // Core App State
+  // App Navigation & Data State
   const [activeTab, setActiveTab] = useState('customer');
   const [menu, setMenu] = useState([]);
   const [cart, setCart] = useState([]);
@@ -58,8 +63,8 @@ export default function App() {
 
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   
-  // Check if logged-in account is Admin
-  const isAdmin = user && (user.email === ADMIN_EMAIL || user.phone === ADMIN_PHONE);
+  // Verification check for Admin privileges
+  const isAdmin = user && (user.email === ADMIN_EMAIL || user.phone === ADMIN_PHONE || user.isAdmin);
 
   useEffect(() => {
     if (user) {
@@ -130,39 +135,83 @@ export default function App() {
     }
   }, [user, isAdmin, activeCustomerOrder?.orderId]);
 
-  // Auth Submit
-  const handleAuthSubmit = (e) => {
+  // Request 6-digit OTP from Server
+  const handleRequestOtp = async (e) => {
     e.preventDefault();
+    if (!loginName.trim()) return alert('Please enter your full name');
+
+    let identifier = '';
     if (loginMethod === 'mobile') {
       const cleanedPhone = loginPhone.trim();
       if (!/^\d{10}$/.test(cleanedPhone)) {
         return alert('Please enter a valid 10-digit mobile number');
       }
-      if (!loginName.trim()) return alert('Please enter your full name');
-
-      const userData = {
-        name: loginName.trim(),
-        phone: cleanedPhone,
-        email: cleanedPhone === ADMIN_PHONE ? ADMIN_EMAIL : '',
-        loginType: 'mobile'
-      };
-      setUser(userData);
-      localStorage.setItem('lasar_user', JSON.stringify(userData));
+      identifier = cleanedPhone;
     } else {
       const cleanedEmail = loginEmail.trim().toLowerCase();
       if (!cleanedEmail || !cleanedEmail.includes('@gmail.com')) {
         return alert('Please enter a valid @gmail.com address');
       }
-      if (!loginName.trim()) return alert('Please enter your full name');
+      identifier = cleanedEmail;
+    }
 
-      const userData = {
-        name: loginName.trim(),
-        phone: cleanedEmail === ADMIN_EMAIL ? ADMIN_PHONE : '',
-        email: cleanedEmail,
-        loginType: 'gmail'
-      };
-      setUser(userData);
-      localStorage.setItem('lasar_user', JSON.stringify(userData));
+    setIsSendingOtp(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, type: loginMethod })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setOtpStep(true);
+        if (data.debugOtp) {
+          setOtpNotice(`Code sent! (Demo preview: ${data.debugOtp})`);
+        } else {
+          setOtpNotice(`Verification code sent to ${identifier}. Check your inbox / messages.`);
+        }
+      } else {
+        alert(data.error || 'Failed to dispatch code');
+      }
+    } catch (err) {
+      alert('Error requesting code: ' + err.message);
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  // Verify the submitted OTP with Server
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    if (!enteredOtp || enteredOtp.length !== 6) {
+      return alert('Please enter the complete 6-digit verification code');
+    }
+
+    const identifier = loginMethod === 'mobile' ? loginPhone.trim() : loginEmail.trim().toLowerCase();
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier,
+          otp: enteredOtp,
+          name: loginName.trim()
+        })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setUser(data.user);
+        localStorage.setItem('lasar_user', JSON.stringify(data.user));
+        setOtpStep(false);
+        setEnteredOtp('');
+        setOtpNotice('');
+      } else {
+        alert(data.error || 'Invalid verification code');
+      }
+    } catch (err) {
+      alert('Verification failed: ' + err.message);
     }
   };
 
@@ -172,9 +221,10 @@ export default function App() {
     setCart([]);
     setActiveCustomerOrder(null);
     setActiveTab('customer');
+    setOtpStep(false);
+    setEnteredOtp('');
   };
 
-  // Mark Delivered -> Purges Order & Customer Data
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     try {
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
@@ -198,7 +248,6 @@ export default function App() {
     }
   };
 
-  // Admin Audit Decision
   const handleAuditDecision = async (dishId, decision) => {
     try {
       const res = await fetch(`${API_BASE}/api/admin/audit-decision`, {
@@ -220,7 +269,6 @@ export default function App() {
     }
   };
 
-  // Admin Edit Price
   const handleUpdatePrice = async (dishId, currentPrice) => {
     const newPrice = window.prompt('Enter new price (₹):', currentPrice);
     if (!newPrice || isNaN(newPrice) || Number(newPrice) <= 0) return;
@@ -241,7 +289,6 @@ export default function App() {
     }
   };
 
-  // Admin Delete Dish
   const handleDeleteDish = async (dishId, dishName) => {
     if (!window.confirm(`Admin: Permanently delete "${dishName}" from database?`)) return;
 
@@ -257,7 +304,6 @@ export default function App() {
     }
   };
 
-  // Dish Photo Compression
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -282,7 +328,6 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // Partner Submit Dish
   const handlePartnerUpload = async (e) => {
     e.preventDefault();
     if (!newDish.name || !newDish.price) return alert('Please enter dish name and price');
@@ -334,7 +379,6 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // Place Order (With 10-digit validation + Landmark + Online Payment Reference)
   const handlePlaceOrder = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -393,14 +437,14 @@ export default function App() {
   const upiPayString = `upi://pay?pa=${ADMIN_UPI}&pn=Ankit%20Ankit&am=${cartTotal}&cu=INR&tn=Home%20Like%20Food%20Order`;
 
   // ==========================================
-  // VIEW 1: GATEKEEPER LOGIN ONLY (Requirement 5)
+  // VIEW 1: GATEKEEPER 2-STEP OTP AUTHENTICATION
   // ==========================================
   if (!user) {
     return (
       <div style={{ minHeight: '100vh', backgroundColor: '#f4f5f7', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, fontFamily: 'Inter, system-ui, sans-serif' }}>
         <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 410, padding: 30, boxShadow: '0 8px 26px rgba(0,0,0,0.08)' }}>
           
-          {/* Green Circle Logo with 'L' + HOME LIKE FOOD */}
+          {/* Logo Badge */}
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 56, height: 56, borderRadius: '50%', backgroundColor: '#0f8a65', color: '#ffffff', fontSize: 30, fontWeight: 900, boxShadow: '0 4px 12px rgba(15,138,101,0.3)', marginBottom: 8 }}>
               L
@@ -408,71 +452,116 @@ export default function App() {
             <div style={{ fontSize: 14, fontWeight: 900, color: '#282c3f', letterSpacing: '2px', textTransform: 'uppercase' }}>
               HOME LIKE FOOD
             </div>
-            <p style={{ margin: '6px 0 0 0', fontSize: 12, color: '#7e808c' }}>Please login to view food menu & place orders</p>
+            <p style={{ margin: '6px 0 0 0', fontSize: 12, color: '#7e808c' }}>
+              {otpStep ? 'Enter 6-digit verification code' : 'Verify mobile number or Gmail to continue'}
+            </p>
           </div>
 
-          {/* Toggle Mobile / Gmail */}
-          <div style={{ display: 'flex', backgroundColor: '#f0f0f5', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-            <button
-              onClick={() => setLoginMethod('mobile')}
-              style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, backgroundColor: loginMethod === 'mobile' ? '#ffffff' : 'transparent', color: loginMethod === 'mobile' ? '#0f8a65' : '#686b78', boxShadow: loginMethod === 'mobile' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none' }}>
-              📱 Mobile Login
-            </button>
-            <button
-              onClick={() => setLoginMethod('gmail')}
-              style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, backgroundColor: loginMethod === 'gmail' ? '#ffffff' : 'transparent', color: loginMethod === 'gmail' ? '#0f8a65' : '#686b78', boxShadow: loginMethod === 'gmail' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none' }}>
-              ✉️ Gmail Login
-            </button>
-          </div>
+          {!otpStep ? (
+            /* STEP 1: ENTER CREDENTIALS & REQUEST CODE */
+            <>
+              <div style={{ display: 'flex', backgroundColor: '#f0f0f5', borderRadius: 10, padding: 4, marginBottom: 20 }}>
+                <button
+                  type="button"
+                  onClick={() => setLoginMethod('mobile')}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, backgroundColor: loginMethod === 'mobile' ? '#ffffff' : 'transparent', color: loginMethod === 'mobile' ? '#0f8a65' : '#686b78', boxShadow: loginMethod === 'mobile' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none' }}>
+                  📱 Mobile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLoginMethod('gmail')}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, backgroundColor: loginMethod === 'gmail' ? '#ffffff' : 'transparent', color: loginMethod === 'gmail' ? '#0f8a65' : '#686b78', boxShadow: loginMethod === 'gmail' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none' }}>
+                  ✉️ Gmail
+                </button>
+              </div>
 
-          <form onSubmit={handleAuthSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Full Name</label>
-              <input
-                required
-                type="text"
-                placeholder="Enter your name"
-                value={loginName}
-                onChange={e => setLoginName(e.target.value)}
-                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
-              />
-            </div>
+              <form onSubmit={handleRequestOtp} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Full Name</label>
+                  <input
+                    required
+                    type="text"
+                    placeholder="Enter your name"
+                    value={loginName}
+                    onChange={e => setLoginName(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                  />
+                </div>
 
-            {loginMethod === 'mobile' ? (
+                {loginMethod === 'mobile' ? (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>10-Digit Mobile Number</label>
+                    <input
+                      required
+                      type="tel"
+                      maxLength={10}
+                      pattern="[0-9]{10}"
+                      placeholder="e.g. 7379434080"
+                      value={loginPhone}
+                      onChange={e => setLoginPhone(e.target.value.replace(/\D/g, ''))}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Gmail Address</label>
+                    <input
+                      required
+                      type="email"
+                      placeholder="e.g. ankit917379@gmail.com"
+                      value={loginEmail}
+                      onChange={e => setLoginEmail(e.target.value)}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isSendingOtp}
+                  style={{ backgroundColor: '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', marginTop: 6, boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
+                  {isSendingOtp ? 'Sending Code...' : 'Send 6-Digit Verification Code →'}
+                </button>
+              </form>
+            </>
+          ) : (
+            /* STEP 2: ENTER AND VALIDATE 6-DIGIT CODE */
+            <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ backgroundColor: '#e5f7f1', padding: '10px 12px', borderRadius: 8, fontSize: 12, color: '#0f8a65', fontWeight: 600, textAlign: 'center' }}>
+                {otpNotice || `Code sent to ${loginMethod === 'mobile' ? loginPhone : loginEmail}`}
+              </div>
+
               <div>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>10-Digit Mobile Number</label>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 6 }}>
+                  Enter 6-Digit Code
+                </label>
                 <input
                   required
-                  type="tel"
-                  maxLength={10}
-                  pattern="[0-9]{10}"
-                  placeholder="e.g. 9876543210"
-                  value={loginPhone}
-                  onChange={e => setLoginPhone(e.target.value.replace(/\D/g, ''))}
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                  autoFocus
+                  type="text"
+                  maxLength={6}
+                  pattern="[0-9]{6}"
+                  placeholder="• • • • • •"
+                  value={enteredOtp}
+                  onChange={e => setEnteredOtp(e.target.value.replace(/\D/g, ''))}
+                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: '2px solid #0f8a65', fontSize: 24, textAlign: 'center', letterSpacing: 8, fontWeight: 800, boxSizing: 'border-box', outline: 'none' }}
                 />
               </div>
-            ) : (
-              <div>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Gmail Address</label>
-                <input
-                  required
-                  type="email"
-                  placeholder="name@gmail.com"
-                  value={loginEmail}
-                  onChange={e => setLoginEmail(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
-                />
-                <span style={{ fontSize: 10, color: '#888', marginTop: 3, display: 'block' }}>Admin login: ankit917379@gmail.com</span>
-              </div>
-            )}
 
-            <button
-              type="submit"
-              style={{ backgroundColor: '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', marginTop: 6, boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-              Login to Home Like Food →
-            </button>
-          </form>
+              <button
+                type="submit"
+                style={{ backgroundColor: '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
+                Verify & Enter Home Like Food
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setOtpStep(false); setEnteredOtp(''); }}
+                style={{ background: 'none', border: 'none', color: '#7e808c', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+                ← Change Number / Gmail
+              </button>
+            </form>
+          )}
         </div>
       </div>
     );
@@ -500,7 +589,6 @@ export default function App() {
           </div>
 
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {/* Admin-only Navigation Controls */}
             {isAdmin && (
               <>
                 <button onClick={() => { setActiveTab('customer'); fetchMenu(); }} style={{ padding: '6px 10px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, backgroundColor: activeTab === 'customer' ? '#0f8a65' : '#f0f0f5', color: activeTab === 'customer' ? '#fff' : '#3d4152' }}>
@@ -779,7 +867,6 @@ export default function App() {
         {/* 3. MASTER ADMIN CONTROLS (Admin Only) */}
         {isAdmin && activeTab === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* Pending Audits Queue */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', borderTop: '4px solid #282c3f' }}>
               <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Taste & Quality Audit Queue ({auditQueue.pendingDishes.length})</h2>
               <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#7e808c' }}>Approve or reject dishes before they appear on the menu.</p>
@@ -812,7 +899,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Live Certified Dishes Management */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
               <div>
                 <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Live Certified Menu ({auditQueue.approvedDishes.length})</h2>
@@ -904,7 +990,6 @@ export default function App() {
                 <input required type="text" placeholder="e.g. Near City Hospital / Opp. Park" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              {/* Online Payment Card with Your Admin QR & Details */}
               <div style={{ backgroundColor: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10, padding: 14, marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#166534' }}>PAYMENT: ONLINE UPI ONLY</span>
@@ -917,7 +1002,6 @@ export default function App() {
                   • UPI ID: <strong>{ADMIN_UPI}</strong>
                 </p>
 
-                {/* Scannable Admin QR Code */}
                 <div style={{ textAlign: 'center', margin: '8px 0', backgroundColor: '#fff', padding: 10, borderRadius: 8, display: 'inline-block', width: '100%', boxSizing: 'border-box' }}>
                   <img 
                     src={ADMIN_QR_CODE_URL} 
@@ -929,7 +1013,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Direct Launch on Mobile Phones */}
                 <a
                   href={upiPayString}
                   style={{ display: 'block', textAlign: 'center', backgroundColor: '#0f8a65', color: '#fff', padding: '9px 0', borderRadius: 6, textDecoration: 'none', fontWeight: 800, fontSize: 12, marginBottom: 12 }}>
