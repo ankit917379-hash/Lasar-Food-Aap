@@ -8,11 +8,12 @@ const ADMIN_EMAIL = 'ankit917379@gmail.com';
 const ADMIN_PHONE = '7379434080';
 const ADMIN_UPI = 'ankit917379@okhdfcbank';
 
-// Dynamic Scannable UPI QR Generator pointing to your Admin UPI
+// Private Master PIN for Admin access
+const ADMIN_SECRET_PIN = '9173';
+
 const ADMIN_QR_CODE_URL = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(`upi://pay?pa=${ADMIN_UPI}&pn=Ankit%20Ankit&cu=INR`);
 
 export default function App() {
-  // Authentication State
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem('lasar_user');
@@ -22,16 +23,16 @@ export default function App() {
     }
   });
 
-  const [loginMethod, setLoginMethod] = useState('mobile'); // 'mobile' | 'gmail'
+  const [loginMethod, setLoginMethod] = useState('mobile');
   const [loginName, setLoginName] = useState('');
   const [loginPhone, setLoginPhone] = useState('');
   const [loginEmail, setLoginEmail] = useState('');
   
   // Verification State
-  const [otpStep, setOtpStep] = useState(false);
+  const [authStep, setAuthStep] = useState(false);
+  const [isAdminLoginAttempt, setIsAdminLoginAttempt] = useState(false);
   const [generatedOtp, setGeneratedOtp] = useState('');
-  const [enteredOtp, setEnteredOtp] = useState('');
-  const [otpNotice, setOtpNotice] = useState('');
+  const [enteredCode, setEnteredCode] = useState('');
   const [isSendingOtp, setIsSendingOtp] = useState(false);
 
   // App Navigation & Data State
@@ -69,7 +70,7 @@ export default function App() {
   });
 
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
-  const isAdmin = user && (user.email === ADMIN_EMAIL || user.phone === ADMIN_PHONE || user.isAdmin);
+  const isAdmin = user && user.isAdmin;
 
   useEffect(() => {
     if (user) {
@@ -81,7 +82,6 @@ export default function App() {
     }
   }, [user]);
 
-  // Safe API Fetch Wrapper that NEVER crashes on HTML <!DOCTYPE errors
   const safeFetchJson = async (url, options = {}) => {
     try {
       const res = await fetch(url, options);
@@ -145,10 +145,8 @@ export default function App() {
     }
   }, [user, isAdmin, activeCustomerOrder?.orderId]);
 
-  // ==========================================
-  // BULLETPROOF OTP GENERATION & DISPATCH
-  // ==========================================
-  const handleRequestOtp = async (e) => {
+  // Request code / Detect Admin attempt
+  const handleRequestAuth = async (e) => {
     e.preventDefault();
     if (!loginName.trim()) return alert('Please enter your full name');
 
@@ -169,52 +167,64 @@ export default function App() {
 
     setIsSendingOtp(true);
 
-    // 1. Generate guaranteed client-side 6-digit code
-    const secureCode = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(secureCode);
+    const tryingAdmin = identifier === ADMIN_PHONE || identifier === ADMIN_EMAIL;
+    setIsAdminLoginAttempt(tryingAdmin);
 
-    // 2. Safely sync with backend without crashing if Render is sleeping
-    try {
-      await safeFetchJson(`${API_BASE}/api/auth/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, type: loginMethod, clientCode: secureCode })
-      });
-    } catch {
-      // Backend asleep or route missing, fail-safe keeps working smoothly
+    if (tryingAdmin) {
+      // Admin authentication requires Master PIN
+      setGeneratedOtp('');
+      setAuthStep(true);
+      setIsSendingOtp(false);
+    } else {
+      // Normal Customer OTP verification
+      const secureCode = Math.floor(100000 + Math.random() * 900000).toString();
+      setGeneratedOtp(secureCode);
+      setAuthStep(true);
+      setIsSendingOtp(false);
     }
-
-    setOtpStep(true);
-    setOtpNotice(`Verification Code: ${secureCode}`);
-    setIsSendingOtp(false);
   };
 
-  const handleVerifyOtp = (e) => {
+  // Verify submitted Code or PIN
+  const handleVerifyAuth = (e) => {
     e.preventDefault();
-    if (!enteredOtp || enteredOtp.trim().length !== 6) {
-      return alert('Please enter the complete 6-digit verification code');
-    }
-
     const cleanIdentifier = loginMethod === 'mobile' ? loginPhone.trim() : loginEmail.trim().toLowerCase();
 
-    // Verify against generated code OR master admin emergency bypass code 737943
-    if (enteredOtp.trim() === generatedOtp || enteredOtp.trim() === '737943') {
-      const isAccountAdmin = cleanIdentifier === ADMIN_EMAIL || cleanIdentifier === ADMIN_PHONE;
-      const userData = {
-        name: loginName.trim() + (isAccountAdmin ? ' (Admin)' : ''),
+    if (isAdminLoginAttempt) {
+      // Check Master Admin PIN
+      if (enteredCode.trim() !== ADMIN_SECRET_PIN) {
+        return alert('Incorrect Admin Passcode. Access to admin controls denied.');
+      }
+
+      const adminUser = {
+        name: 'Ankit Gupta (Admin)',
         identifier: cleanIdentifier,
-        phone: cleanIdentifier.length === 10 && !isNaN(cleanIdentifier) ? cleanIdentifier : (isAccountAdmin ? ADMIN_PHONE : ''),
-        email: cleanIdentifier.includes('@') ? cleanIdentifier : (isAccountAdmin ? ADMIN_EMAIL : ''),
-        isAdmin: isAccountAdmin
+        phone: ADMIN_PHONE,
+        email: ADMIN_EMAIL,
+        isAdmin: true
       };
 
-      setUser(userData);
-      localStorage.setItem('lasar_user', JSON.stringify(userData));
-      setOtpStep(false);
-      setEnteredOtp('');
-      setOtpNotice('');
+      setUser(adminUser);
+      localStorage.setItem('lasar_user', JSON.stringify(adminUser));
+      setAuthStep(false);
+      setEnteredCode('');
     } else {
-      alert('Incorrect 6-digit verification code. Please check the on-screen code.');
+      // Customer OTP verification
+      if (enteredCode.trim() !== generatedOtp) {
+        return alert('Incorrect verification code. Please check the code.');
+      }
+
+      const regularUser = {
+        name: loginName.trim(),
+        identifier: cleanIdentifier,
+        phone: cleanIdentifier.length === 10 && !isNaN(cleanIdentifier) ? cleanIdentifier : '',
+        email: cleanIdentifier.includes('@') ? cleanIdentifier : '',
+        isAdmin: false
+      };
+
+      setUser(regularUser);
+      localStorage.setItem('lasar_user', JSON.stringify(regularUser));
+      setAuthStep(false);
+      setEnteredCode('');
     }
   };
 
@@ -224,11 +234,11 @@ export default function App() {
     setCart([]);
     setActiveCustomerOrder(null);
     setActiveTab('customer');
-    setOtpStep(false);
-    setEnteredOtp('');
+    setAuthStep(false);
+    setEnteredCode('');
+    setIsAdminLoginAttempt(false);
   };
 
-  // Order Delivery: Delete from State and Database
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
@@ -247,7 +257,6 @@ export default function App() {
     }
   };
 
-  // Admin Audit Decision
   const handleAuditDecision = async (dishId, decision) => {
     const res = await safeFetchJson(`${API_BASE}/api/admin/audit-decision`, {
       method: 'POST',
@@ -265,7 +274,6 @@ export default function App() {
     }
   };
 
-  // Admin Change Price
   const handleUpdatePrice = async (dishId, currentPrice) => {
     const newPrice = window.prompt('Enter new price (₹):', currentPrice);
     if (!newPrice || isNaN(newPrice) || Number(newPrice) <= 0) return;
@@ -282,7 +290,6 @@ export default function App() {
     }
   };
 
-  // Admin Delete Dish
   const handleDeleteDish = async (dishId, dishName) => {
     if (!window.confirm(`Admin: Permanently delete "${dishName}" from database?`)) return;
 
@@ -294,7 +301,6 @@ export default function App() {
     }
   };
 
-  // Mobile Photo Compression
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -319,7 +325,6 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // Partner Submit Dish
   const handlePartnerUpload = async (e) => {
     e.preventDefault();
     if (!newDish.name || !newDish.price) return alert('Please enter dish name and price');
@@ -366,7 +371,6 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // Customer Place Order
   const handlePlaceOrder = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -432,7 +436,6 @@ export default function App() {
       <div style={{ minHeight: '100vh', backgroundColor: '#f4f5f7', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, fontFamily: 'Inter, system-ui, sans-serif' }}>
         <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 400, padding: 28, boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
           
-          {/* Logo with Green Circle 'L' and HOME LIKE FOOD */}
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 56, height: 56, borderRadius: '50%', backgroundColor: '#0f8a65', color: '#ffffff', fontSize: 30, fontWeight: 900, boxShadow: '0 4px 12px rgba(15,138,101,0.3)', marginBottom: 8 }}>
               L
@@ -441,13 +444,12 @@ export default function App() {
               HOME LIKE FOOD
             </div>
             <p style={{ margin: '6px 0 0 0', fontSize: 12, color: '#7e808c' }}>
-              {otpStep ? 'Enter 6-digit verification code below' : 'Sign in to explore food menu & place orders'}
+              {authStep ? (isAdminLoginAttempt ? 'Admin Security Verification' : 'Customer OTP Verification') : 'Sign in to explore food menu & place orders'}
             </p>
           </div>
 
-          {!otpStep ? (
+          {!authStep ? (
             <>
-              {/* Toggle Mobile / Gmail */}
               <div style={{ display: 'flex', backgroundColor: '#f0f0f5', borderRadius: 10, padding: 4, marginBottom: 20 }}>
                 <button
                   type="button"
@@ -463,7 +465,7 @@ export default function App() {
                 </button>
               </div>
 
-              <form onSubmit={handleRequestOtp} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <form onSubmit={handleRequestAuth} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Full Name</label>
                   <input
@@ -484,7 +486,7 @@ export default function App() {
                       type="tel"
                       maxLength={10}
                       pattern="[0-9]{10}"
-                      placeholder="e.g. 7379434080"
+                      placeholder="e.g. 9876543210"
                       value={loginPhone}
                       onChange={e => setLoginPhone(e.target.value.replace(/\D/g, ''))}
                       style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
@@ -496,12 +498,11 @@ export default function App() {
                     <input
                       required
                       type="email"
-                      placeholder="e.g. ankit917379@gmail.com"
+                      placeholder="name@gmail.com"
                       value={loginEmail}
                       onChange={e => setLoginEmail(e.target.value)}
                       style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
                     />
-                    <span style={{ fontSize: 11, color: '#777', marginTop: 3, display: 'block' }}>Admin login: ankit917379@gmail.com</span>
                   </div>
                 )}
 
@@ -509,41 +510,51 @@ export default function App() {
                   type="submit"
                   disabled={isSendingOtp}
                   style={{ backgroundColor: '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', marginTop: 6, boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                  {isSendingOtp ? 'Generating...' : 'Send 6-Digit Verification Code →'}
+                  {isSendingOtp ? 'Checking...' : 'Continue →'}
                 </button>
               </form>
             </>
           ) : (
-            /* STEP 2: ENTER AND VALIDATE 6-DIGIT CODE */
-            <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ backgroundColor: '#e5f7f1', border: '1.5px solid #0f8a65', padding: '12px', borderRadius: 10, textAlign: 'center' }}>
-                <span style={{ fontSize: 12, color: '#0f8a65', fontWeight: 800, display: 'block' }}>YOUR VERIFICATION CODE:</span>
-                <span style={{ fontSize: 28, color: '#0f8a65', fontWeight: 900, letterSpacing: 6 }}>{generatedOtp}</span>
-                <p style={{ margin: '4px 0 0 0', fontSize: 11, color: '#555' }}>Enter the 6 digits below to confirm your login</p>
-              </div>
+            <form onSubmit={handleVerifyAuth} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {isAdminLoginAttempt ? (
+                /* Admin Passcode Gate */
+                <div style={{ backgroundColor: '#fef2f2', border: '1.5px solid #ef4444', padding: '14px', borderRadius: 10, textAlign: 'center' }}>
+                  <span style={{ fontSize: 13, color: '#991b1b', fontWeight: 900, display: 'block' }}>🛡️ ADMIN ACCESS DETECTED</span>
+                  <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#b91c1c' }}>
+                    Enter Master Admin Security PIN (Only known to the Admin owner):
+                  </p>
+                </div>
+              ) : (
+                /* Customer OTP */
+                <div style={{ backgroundColor: '#e5f7f1', border: '1.5px solid #0f8a65', padding: '12px', borderRadius: 10, textAlign: 'center' }}>
+                  <span style={{ fontSize: 12, color: '#0f8a65', fontWeight: 800, display: 'block' }}>CUSTOMER VERIFICATION CODE:</span>
+                  <span style={{ fontSize: 28, color: '#0f8a65', fontWeight: 900, letterSpacing: 6 }}>{generatedOtp}</span>
+                  <p style={{ margin: '4px 0 0 0', fontSize: 11, color: '#555' }}>Enter the 6 digits below to view the menu</p>
+                </div>
+              )}
 
               <div>
                 <input
                   required
                   autoFocus
-                  type="text"
-                  maxLength={6}
-                  placeholder="• • • • • •"
-                  value={enteredOtp}
-                  onChange={e => setEnteredOtp(e.target.value.replace(/\D/g, ''))}
-                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: '2px solid #0f8a65', fontSize: 24, textAlign: 'center', letterSpacing: 8, fontWeight: 800, boxSizing: 'border-box', outline: 'none' }}
+                  type={isAdminLoginAttempt ? 'password' : 'text'}
+                  maxLength={isAdminLoginAttempt ? 8 : 6}
+                  placeholder={isAdminLoginAttempt ? 'Enter Admin PIN' : '• • • • • •'}
+                  value={enteredCode}
+                  onChange={e => setEnteredCode(e.target.value)}
+                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: `2px solid ${isAdminLoginAttempt ? '#ef4444' : '#0f8a65'}`, fontSize: 20, textAlign: 'center', letterSpacing: 4, fontWeight: 800, boxSizing: 'border-box', outline: 'none' }}
                 />
               </div>
 
               <button
                 type="submit"
-                style={{ backgroundColor: '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                Verify & Enter Home Like Food
+                style={{ backgroundColor: isAdminLoginAttempt ? '#dc2626' : '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+                {isAdminLoginAttempt ? 'Unlock Admin Dashboard' : 'Verify & Enter Home Like Food'}
               </button>
 
               <button
                 type="button"
-                onClick={() => { setOtpStep(false); setEnteredOtp(''); }}
+                onClick={() => { setAuthStep(false); setEnteredCode(''); setIsAdminLoginAttempt(false); }}
                 style={{ background: 'none', border: 'none', color: '#7e808c', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
                 ← Change Number / Gmail
               </button>
@@ -555,7 +566,7 @@ export default function App() {
   }
 
   // =========================================================
-  // VIEW 2: LOGGED IN INTERFACE (Admin Full / User Menu Only)
+  // VIEW 2: LOGGED IN INTERFACE
   // =========================================================
   return (
     <div style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif', backgroundColor: '#f4f5f7', minHeight: '100vh', margin: 0, paddingBottom: 110 }}>
@@ -564,7 +575,6 @@ export default function App() {
       <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e0e0e0', position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
         <div style={{ maxWidth: 850, margin: '0 auto', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           
-          {/* Logo Badge */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: '50%', backgroundColor: '#0f8a65', color: '#ffffff', fontSize: 22, fontWeight: 900, boxShadow: '0 2px 6px rgba(15,138,101,0.3)' }}>
               L
@@ -604,10 +614,9 @@ export default function App() {
       {/* Main View Area */}
       <main style={{ maxWidth: 750, margin: '16px auto', padding: '0 14px' }}>
 
-        {/* 1. CUSTOMER MENU (Shown to normal users AND Admin when on customer tab) */}
+        {/* 1. CUSTOMER MENU */}
         {activeTab === 'customer' && (
           <div>
-            {/* Live Order Tracker for Customer */}
             {activeCustomerOrder && (
               <div style={{ backgroundColor: '#ffffff', borderRadius: 12, padding: 16, marginBottom: 16, borderLeft: '6px solid #0f8a65', boxShadow: '0 3px 12px rgba(0,0,0,0.08)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -718,7 +727,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. ADMIN KITCHEN DISPATCH (Admin Only) */}
+        {/* 2. ADMIN KITCHEN DISPATCH */}
         {isAdmin && activeTab === 'partner' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', borderTop: '4px solid #0f8a65' }}>
@@ -850,10 +859,9 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. MASTER ADMIN CONTROLS (Admin Only) */}
+        {/* 3. MASTER ADMIN CONTROLS */}
         {isAdmin && activeTab === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* Pending Audits Queue */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', borderTop: '4px solid #282c3f' }}>
               <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Taste & Quality Audit Queue ({auditQueue.pendingDishes.length})</h2>
               <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#7e808c' }}>Approve or reject dishes before they appear on the menu.</p>
@@ -886,7 +894,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Live Certified Dishes Management */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
               <div>
                 <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Live Certified Menu ({auditQueue.approvedDishes.length})</h2>
@@ -978,7 +985,6 @@ export default function App() {
                 <input required type="text" placeholder="e.g. Near City Hospital / Opp. Park" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              {/* Online Payment Card with Your Admin QR & Details */}
               <div style={{ backgroundColor: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10, padding: 14, marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#166534' }}>PAYMENT: ONLINE UPI ONLY</span>
@@ -991,7 +997,6 @@ export default function App() {
                   • UPI ID: <strong>{ADMIN_UPI}</strong>
                 </p>
 
-                {/* Scannable Admin QR Code */}
                 <div style={{ textAlign: 'center', margin: '8px 0', backgroundColor: '#fff', padding: 10, borderRadius: 8, display: 'inline-block', width: '100%', boxSizing: 'border-box' }}>
                   <img 
                     src={ADMIN_QR_CODE_URL} 
