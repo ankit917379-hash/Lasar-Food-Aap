@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const nodemailer = require('nodemailer');
@@ -11,8 +11,8 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 const MONGO_URI = 'mongodb+srv://ankit917379_db_user:LasarFood2026@lasar-cluster.hlz0irb.mongodb.net/lasarDB?retryWrites=true&w=majority&appName=lasar-cluster';
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('🍃 Connected to MongoDB Atlas Cloud Database successfully!'))
-  .catch(err => console.error('❌ MongoDB Connection Error:', err));
+  .then(() => console.log('Connected to MongoDB Atlas Cloud Database successfully!'))
+  .catch(err => console.error('MongoDB Connection Error:', err));
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -28,7 +28,6 @@ function generateOtp() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Schemas
 const MenuItemSchema = new mongoose.Schema({
   restaurantId: { type: String, default: 'rest_lasar_01' },
   restaurantName: { type: String, default: 'LASAR Home Kitchen' },
@@ -64,12 +63,10 @@ const OrderSchema = new mongoose.Schema({
 const MenuItem = mongoose.model('MenuItem', MenuItemSchema);
 const Order = mongoose.model('Order', OrderSchema);
 
-// Routes
 app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Send OTP
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
     const { identifier, type } = req.body;
@@ -82,7 +79,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
     const expiresAt = Date.now() + 5 * 60 * 1000;
 
     otpStore.set(cleanIdentifier, { otp: code, expiresAt });
-    console.log(`🔐 [AUTH] Generated OTP for ${cleanIdentifier}: ${code}`);
+    console.log(`Generated OTP for ${cleanIdentifier}: ${code}`);
 
     if (type === 'gmail' && process.env.GMAIL_PASS) {
       try {
@@ -104,7 +101,6 @@ app.post('/api/auth/send-otp', async (req, res) => {
   }
 });
 
-// Verify OTP
 app.post('/api/auth/verify-otp', (req, res) => {
   try {
     const { identifier, otp, name } = req.body;
@@ -147,7 +143,6 @@ app.post('/api/auth/verify-otp', (req, res) => {
   }
 });
 
-// Menu endpoints
 app.post('/api/menu/upload', async (req, res) => {
   try {
     const dish = new MenuItem({
@@ -175,7 +170,6 @@ app.get('/api/menu', async (req, res) => {
   }
 });
 
-// Admin queue endpoints
 app.get('/api/admin/audit-queue', async (req, res) => {
   try {
     const pendingDishes = await MenuItem.find({ auditStatus: 'pending_audit' }).sort({ createdAt: -1 });
@@ -228,7 +222,6 @@ app.delete('/api/admin/dish/:id', async (req, res) => {
   }
 });
 
-// Order endpoints
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, address, landmark, items, totalAmount, paymentMethod } = req.body;
@@ -283,4 +276,4 @@ app.patch('/api/orders/:id/status', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 LASAR Full-Stack API listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`LASAR Full-Stack API listening on port ${PORT}`));
