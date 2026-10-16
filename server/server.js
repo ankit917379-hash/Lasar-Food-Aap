@@ -34,9 +34,10 @@ const OrderSchema = new mongoose.Schema({
   customerName: { type: String, required: true },
   phone: { type: String, required: true },
   address: { type: String, required: true },
+  landmark: { type: String, default: '' },
   items: Array,
   totalAmount: Number,
-  paymentMethod: { type: String, default: 'Cash On Delivery' },
+  paymentMethod: { type: String, default: 'Online UPI' },
   status: { 
     type: String, 
     enum: ['Order Received', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered'],
@@ -104,7 +105,7 @@ app.post('/api/admin/audit-decision', async (req, res) => {
     if (!dish) return res.status(404).json({ error: 'Dish not found' });
 
     dish.auditStatus = decision;
-    dish.adminFeedback = feedback || (decision === 'approved' ? 'Passed Taste & Quality Audit by LASAR Master Admin' : 'Quality rejected');
+    dish.adminFeedback = feedback || (decision === 'approved' ? 'Passed Taste & Quality Audit by Admin' : 'Quality rejected');
     await dish.save();
 
     res.json({ success: true, dish });
@@ -147,22 +148,24 @@ app.delete('/api/admin/dish/:id', async (req, res) => {
 
 // --- ORDERS API ---
 
-// Create Order
+// Create Order (Online Payment)
 app.post('/api/orders', async (req, res) => {
   try {
-    const { customerName, phone, address, items, totalAmount } = req.body;
+    const { customerName, phone, address, landmark, items, totalAmount, paymentMethod } = req.body;
     const order = new Order({
       orderId: 'LSR-' + Math.floor(100000 + Math.random() * 900000),
       customerName,
       phone,
       address,
+      landmark: landmark || '',
       items,
       totalAmount,
+      paymentMethod: paymentMethod || 'Online UPI',
       status: 'Order Received',
       otp: Math.floor(1000 + Math.random() * 9000)
     });
     await order.save();
-    console.log('✅ New Order Placed & Stored:', order.orderId);
+    console.log(`✅ New Online Paid Order Placed: #${order.orderId} from ${customerName}`);
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -184,7 +187,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
 
-    // If marked Delivered, permanently purge customer personal data from MongoDB
+    // Auto-purge all customer personal info when food is delivered
     if (status === 'Delivered') {
       const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
       if (!purgedOrder) return res.status(404).json({ error: 'Order not found' });
@@ -195,18 +198,16 @@ app.patch('/api/orders/:id/status', async (req, res) => {
         delivered: true, 
         purged: true, 
         orderId: purgedOrder.orderId, 
-        message: 'Order completed and customer details purged from database.' 
+        message: 'Order delivered and customer data cleared from database.' 
       });
     }
 
-    // Normal status progression
     const updatedOrder = await Order.findOneAndUpdate(
       { orderId: req.params.id },
       { $set: { status } },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`🛵 Order ${updatedOrder.orderId} updated to: ${status}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });
