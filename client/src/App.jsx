@@ -7,11 +7,10 @@ const API_BASE = window.location.hostname === 'localhost'
 const ADMIN_EMAIL = 'ankit917379@gmail.com';
 const ADMIN_PHONE = '7379434080';
 const ADMIN_UPI = 'ankit917379@okhdfcbank';
-
-// Private Master PIN for Admin access
 const ADMIN_SECRET_PIN = '9173';
 
-const ADMIN_QR_CODE_URL = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(`upi://pay?pa=${ADMIN_UPI}&pn=Ankit%20Ankit&cu=INR`);
+// Dynamic Scannable Admin UPI QR Code
+const ADMIN_QR_CODE_URL = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(`upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&cu=INR`);
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -28,14 +27,14 @@ export default function App() {
   const [loginPhone, setLoginPhone] = useState('');
   const [loginEmail, setLoginEmail] = useState('');
   
-  // Verification State
+  // Auth state
   const [authStep, setAuthStep] = useState(false);
   const [isAdminLoginAttempt, setIsAdminLoginAttempt] = useState(false);
   const [generatedOtp, setGeneratedOtp] = useState('');
   const [enteredCode, setEnteredCode] = useState('');
   const [isSendingOtp, setIsSendingOtp] = useState(false);
 
-  // App Navigation & Data State
+  // App tabs & data
   const [activeTab, setActiveTab] = useState('customer');
   const [menu, setMenu] = useState([]);
   const [cart, setCart] = useState([]);
@@ -45,11 +44,12 @@ export default function App() {
   const [filterVegOnly, setFilterVegOnly] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
   
-  // Checkout & Order Form State
+  // Checkout & Order Form
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [customerForm, setCustomerForm] = useState({
     name: '',
     phone: '',
+    deliveryArea: '',
     address: '',
     landmark: '',
     transactionRef: ''
@@ -58,15 +58,15 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [apiConnected, setApiConnected] = useState(false);
 
-  // Partner Dish Upload Form
+  // Partner dish upload
   const [newDish, setNewDish] = useState({
     name: '',
     price: '',
-    category: 'Snacks',
+    category: 'Thali & Meals',
     isVeg: true,
     description: '',
     image: '',
-    restaurantName: 'LASAR Home Kitchen'
+    restaurantName: 'LASAR Cloud Kitchen'
   });
 
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
@@ -103,17 +103,13 @@ export default function App() {
 
   const fetchMenu = async () => {
     const res = await safeFetchJson(`${API_BASE}/api/menu`);
-    if (res.ok && Array.isArray(res.data)) {
-      setMenu(res.data);
-    }
+    if (res.ok && Array.isArray(res.data)) setMenu(res.data);
   };
 
   const fetchAuditData = async () => {
     if (!isAdmin) return;
     const res = await safeFetchJson(`${API_BASE}/api/admin/audit-queue`);
-    if (res.ok && res.data && res.data.pendingDishes) {
-      setAuditQueue(res.data);
-    }
+    if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
   const fetchOrders = async () => {
@@ -121,11 +117,9 @@ export default function App() {
     if (res.ok && Array.isArray(res.data)) {
       setOrders(res.data);
       if (activeCustomerOrder) {
-        const exists = res.data.find(o => o.orderId === activeCustomerOrder.orderId);
-        if (!exists) {
-          setActiveCustomerOrder(null);
-        } else {
-          setActiveCustomerOrder(exists);
+        const found = res.data.find(o => o.orderId === activeCustomerOrder.orderId);
+        if (found) {
+          setActiveCustomerOrder(found);
         }
       }
     }
@@ -140,12 +134,12 @@ export default function App() {
 
       const interval = setInterval(() => {
         fetchOrders();
-      }, 4000);
+      }, 3500);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin, activeCustomerOrder?.orderId]);
 
-  // Request code / Detect Admin attempt
+  // Auth
   const handleRequestAuth = async (e) => {
     e.preventDefault();
     if (!loginName.trim()) return alert('Please enter your full name');
@@ -153,48 +147,38 @@ export default function App() {
     let identifier = '';
     if (loginMethod === 'mobile') {
       const cleaned = loginPhone.trim().replace(/\D/g, '');
-      if (cleaned.length !== 10) {
-        return alert('Please enter a valid 10-digit mobile number');
-      }
+      if (cleaned.length !== 10) return alert('Please enter a valid 10-digit mobile number');
       identifier = cleaned;
     } else {
       const cleaned = loginEmail.trim().toLowerCase();
-      if (!cleaned || !cleaned.includes('@gmail.com')) {
-        return alert('Please enter a valid @gmail.com address');
-      }
+      if (!cleaned || !cleaned.includes('@gmail.com')) return alert('Please enter a valid @gmail.com address');
       identifier = cleaned;
     }
 
     setIsSendingOtp(true);
-
     const tryingAdmin = identifier === ADMIN_PHONE || identifier === ADMIN_EMAIL;
     setIsAdminLoginAttempt(tryingAdmin);
 
     if (tryingAdmin) {
-      // Admin authentication requires Master PIN
       setGeneratedOtp('');
       setAuthStep(true);
       setIsSendingOtp(false);
     } else {
-      // Normal Customer OTP verification
-      const secureCode = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedOtp(secureCode);
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      setGeneratedOtp(code);
       setAuthStep(true);
       setIsSendingOtp(false);
     }
   };
 
-  // Verify submitted Code or PIN
   const handleVerifyAuth = (e) => {
     e.preventDefault();
     const cleanIdentifier = loginMethod === 'mobile' ? loginPhone.trim() : loginEmail.trim().toLowerCase();
 
     if (isAdminLoginAttempt) {
-      // Check Master Admin PIN
       if (enteredCode.trim() !== ADMIN_SECRET_PIN) {
-        return alert('Incorrect Admin Passcode. Access to admin controls denied.');
+        return alert('Incorrect Admin Passcode. Access denied.');
       }
-
       const adminUser = {
         name: 'Ankit Gupta (Admin)',
         identifier: cleanIdentifier,
@@ -202,17 +186,14 @@ export default function App() {
         email: ADMIN_EMAIL,
         isAdmin: true
       };
-
       setUser(adminUser);
       localStorage.setItem('lasar_user', JSON.stringify(adminUser));
       setAuthStep(false);
       setEnteredCode('');
     } else {
-      // Customer OTP verification
       if (enteredCode.trim() !== generatedOtp) {
-        return alert('Incorrect verification code. Please check the code.');
+        return alert('Incorrect verification code. Please check on-screen OTP.');
       }
-
       const regularUser = {
         name: loginName.trim(),
         identifier: cleanIdentifier,
@@ -220,7 +201,6 @@ export default function App() {
         email: cleanIdentifier.includes('@') ? cleanIdentifier : '',
         isAdmin: false
       };
-
       setUser(regularUser);
       localStorage.setItem('lasar_user', JSON.stringify(regularUser));
       setAuthStep(false);
@@ -239,6 +219,24 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
+  // Admin verifies payment & sets delivery window
+  const handleConfirmPaymentAndAccept = async (orderId) => {
+    const slot = window.prompt('Set Delivery Time Slot for this order (e.g. "1:15 PM - 1:45 PM" or "35-45 mins"):', '30-45 mins');
+    if (!slot) return;
+
+    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/confirm-payment`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deliverySlot: slot })
+    });
+
+    if (res.ok) {
+      alert(`Order #${orderId} payment confirmed! User is notified that order is officially placed.`);
+      fetchOrders();
+    }
+  };
+
+  // Status updates
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
@@ -247,7 +245,7 @@ export default function App() {
     });
 
     if (res.data?.purged || newStatus === 'Delivered') {
-      alert(`Order #${orderId} delivered! Customer data permanently purged.`);
+      alert(`Order #${orderId} delivered! Customer data removed from database.`);
       setOrders(prev => prev.filter(o => o.orderId !== orderId));
       if (activeCustomerOrder?.orderId === orderId) {
         setActiveCustomerOrder(null);
@@ -264,7 +262,7 @@ export default function App() {
       body: JSON.stringify({
         dishId,
         decision,
-        feedback: decision === 'approved' ? 'Approved by Master Admin' : 'Rejected'
+        feedback: decision === 'approved' ? 'Approved by Master Admin' : 'Quality rejected'
       })
     });
     if (res.ok) {
@@ -291,11 +289,10 @@ export default function App() {
   };
 
   const handleDeleteDish = async (dishId, dishName) => {
-    if (!window.confirm(`Admin: Permanently delete "${dishName}" from database?`)) return;
-
+    if (!window.confirm(`Permanently delete "${dishName}"?`)) return;
     const res = await safeFetchJson(`${API_BASE}/api/admin/dish/${dishId}`, { method: 'DELETE' });
     if (res.ok) {
-      alert(`"${dishName}" deleted successfully!`);
+      alert(`"${dishName}" deleted!`);
       fetchAuditData();
       fetchMenu();
     }
@@ -342,8 +339,8 @@ export default function App() {
 
     setIsSubmitting(false);
     if (res.ok) {
-      alert('🎉 Dish uploaded! Now in the Master Admin Taste & Quality Queue.');
-      setNewDish({ name: '', price: '', category: 'Snacks', isVeg: true, description: '', image: '', restaurantName: 'LASAR Home Kitchen' });
+      alert('🎉 Dish uploaded to Quality Queue!');
+      setNewDish({ name: '', price: '', category: 'Thali & Meals', isVeg: true, description: '', image: '', restaurantName: 'LASAR Cloud Kitchen' });
       fetchAuditData();
       setActiveTab('admin');
     }
@@ -371,50 +368,40 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
+  // Customer places order -> Payment Verification Pending
   const handlePlaceOrder = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
 
     const cleanedPhone = customerForm.phone.trim().replace(/\D/g, '');
-    if (cleanedPhone.length !== 10) {
-      return alert('Phone number must be exactly 10 digits.');
-    }
-    if (!customerForm.address.trim()) {
-      return alert('Please enter delivery address.');
-    }
-    if (!customerForm.landmark.trim()) {
-      return alert('Please enter nearest landmark / famous place.');
-    }
-    if (!customerForm.transactionRef.trim()) {
-      return alert('Please complete the online UPI payment to 7379434080 and enter the UPI UTR / Transaction ID.');
-    }
+    if (cleanedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
+    if (!customerForm.deliveryArea.trim()) return alert('Please enter delivery area / locality.');
+    if (!customerForm.address.trim()) return alert('Please enter complete delivery address.');
+    if (!customerForm.landmark.trim()) return alert('Please enter nearest landmark.');
+    if (!customerForm.transactionRef.trim()) return alert('Please complete UPI payment to 7379434080 and enter the UTR/Reference ID.');
 
-    const fullAddress = `${customerForm.address.trim()} [Near Landmark: ${customerForm.landmark.trim()}]`;
     const res = await safeFetchJson(`${API_BASE}/api/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         customerName: customerForm.name.trim(),
         phone: cleanedPhone,
-        address: fullAddress,
+        deliveryArea: customerForm.deliveryArea.trim(),
+        address: customerForm.address.trim(),
         landmark: customerForm.landmark.trim(),
         transactionRef: customerForm.transactionRef.trim(),
-        paymentMethod: `Online UPI (${customerForm.transactionRef.trim()})`,
+        paymentMethod: `UPI UTR: ${customerForm.transactionRef.trim()}`,
         items: cart,
         totalAmount: cartTotal
       })
     });
 
     if (res.ok && res.data?.success) {
-      alert('🎉 Payment verified & Order Placed successfully!');
+      alert('Payment details submitted! Awaiting Admin bank verification.');
       setActiveCustomerOrder(res.data.order);
       setCart([]);
       setOrderModalOpen(false);
       fetchOrders();
-    } else {
-      alert('Order placed locally. Kitchen notified.');
-      setCart([]);
-      setOrderModalOpen(false);
     }
   };
 
@@ -433,54 +420,70 @@ export default function App() {
   // ==========================================
   if (!user) {
     return (
-      <div style={{ minHeight: '100vh', backgroundColor: '#f4f5f7', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, fontFamily: 'Inter, system-ui, sans-serif' }}>
-        <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 400, padding: 28, boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
+      <div style={{ minHeight: '100vh', backgroundColor: '#f2f2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, fontFamily: 'Basis Grotesque Pro, system-ui, -apple-system, sans-serif' }}>
+        <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 410, padding: 30, boxShadow: '0 10px 30px rgba(0,0,0,0.08)' }}>
           
+          {/* Attractive Cloche / Platter Culinary Logo */}
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 56, height: 56, borderRadius: '50%', backgroundColor: '#0f8a65', color: '#ffffff', fontSize: 30, fontWeight: 900, boxShadow: '0 4px 12px rgba(15,138,101,0.3)', marginBottom: 8 }}>
-              L
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 64,
+              height: 64,
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #fc8019 0%, #ff5200 100%)',
+              color: '#ffffff',
+              fontSize: 32,
+              boxShadow: '0 8px 18px rgba(252, 128, 25, 0.35)',
+              marginBottom: 10
+            }}>
+              🍲
             </div>
-            <div style={{ fontSize: 14, fontWeight: 900, color: '#282c3f', letterSpacing: '2px', textTransform: 'uppercase' }}>
+            <div style={{ fontSize: 20, fontWeight: 900, color: '#282c3f', letterSpacing: '-0.5px' }}>
+              LASAR
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: '#fc8019', letterSpacing: '2.5px', textTransform: 'uppercase', marginTop: 2 }}>
               HOME LIKE FOOD
             </div>
             <p style={{ margin: '6px 0 0 0', fontSize: 12, color: '#7e808c' }}>
-              {authStep ? (isAdminLoginAttempt ? 'Admin Security Verification' : 'Customer OTP Verification') : 'Sign in to explore food menu & place orders'}
+              {authStep ? (isAdminLoginAttempt ? 'Admin Security Check' : 'Enter verification code below') : 'Order fresh homemade meals right to your doorstep'}
             </p>
           </div>
 
           {!authStep ? (
             <>
-              <div style={{ display: 'flex', backgroundColor: '#f0f0f5', borderRadius: 10, padding: 4, marginBottom: 20 }}>
+              <div style={{ display: 'flex', backgroundColor: '#f0f0f5', borderRadius: 12, padding: 4, marginBottom: 20 }}>
                 <button
                   type="button"
                   onClick={() => setLoginMethod('mobile')}
-                  style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, backgroundColor: loginMethod === 'mobile' ? '#ffffff' : 'transparent', color: loginMethod === 'mobile' ? '#0f8a65' : '#686b78', boxShadow: loginMethod === 'mobile' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none' }}>
+                  style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 13, backgroundColor: loginMethod === 'mobile' ? '#ffffff' : 'transparent', color: loginMethod === 'mobile' ? '#fc8019' : '#686b78', boxShadow: loginMethod === 'mobile' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none', transition: 'all 0.2s' }}>
                   📱 Mobile Login
                 </button>
                 <button
                   type="button"
                   onClick={() => setLoginMethod('gmail')}
-                  style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, backgroundColor: loginMethod === 'gmail' ? '#ffffff' : 'transparent', color: loginMethod === 'gmail' ? '#0f8a65' : '#686b78', boxShadow: loginMethod === 'gmail' ? '0 2px 6px rgba(0,0,0,0.08)' : 'none' }}>
+                  style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 13, backgroundColor: loginMethod === 'gmail' ? '#ffffff' : 'transparent', color: loginMethod === 'gmail' ? '#fc8019' : '#686b78', boxShadow: loginMethod === 'gmail' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none', transition: 'all 0.2s' }}>
                   ✉️ Gmail Login
                 </button>
               </div>
 
               <form onSubmit={handleRequestAuth} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Full Name</label>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#3d4152', marginBottom: 5 }}>Full Name</label>
                   <input
                     required
                     type="text"
-                    placeholder="Enter your name"
+                    placeholder="e.g. Rahul Sharma"
                     value={loginName}
                     onChange={e => setLoginName(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                    style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
                   />
                 </div>
 
                 {loginMethod === 'mobile' ? (
                   <div>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>10-Digit Mobile Number</label>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#3d4152', marginBottom: 5 }}>10-Digit Mobile Number</label>
                     <input
                       required
                       type="tel"
@@ -489,19 +492,19 @@ export default function App() {
                       placeholder="e.g. 9876543210"
                       value={loginPhone}
                       onChange={e => setLoginPhone(e.target.value.replace(/\D/g, ''))}
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                      style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
                     />
                   </div>
                 ) : (
                   <div>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#3d4152', marginBottom: 4 }}>Gmail Address</label>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#3d4152', marginBottom: 5 }}>Gmail Address</label>
                     <input
                       required
                       type="email"
                       placeholder="name@gmail.com"
                       value={loginEmail}
                       onChange={e => setLoginEmail(e.target.value)}
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                      style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
                     />
                   </div>
                 )}
@@ -509,27 +512,25 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={isSendingOtp}
-                  style={{ backgroundColor: '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', marginTop: 6, boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                  {isSendingOtp ? 'Checking...' : 'Continue →'}
+                  style={{ backgroundColor: '#fc8019', color: '#ffffff', border: 'none', padding: '14px', borderRadius: 10, fontWeight: 900, fontSize: 14, cursor: 'pointer', marginTop: 6, boxShadow: '0 4px 14px rgba(252, 128, 25, 0.35)' }}>
+                  {isSendingOtp ? 'Checking...' : 'Continue to Order Food →'}
                 </button>
               </form>
             </>
           ) : (
             <form onSubmit={handleVerifyAuth} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {isAdminLoginAttempt ? (
-                /* Admin Passcode Gate */
-                <div style={{ backgroundColor: '#fef2f2', border: '1.5px solid #ef4444', padding: '14px', borderRadius: 10, textAlign: 'center' }}>
-                  <span style={{ fontSize: 13, color: '#991b1b', fontWeight: 900, display: 'block' }}>🛡️ ADMIN ACCESS DETECTED</span>
-                  <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#b91c1c' }}>
-                    Enter Master Admin Security PIN (Only known to the Admin owner):
+                <div style={{ backgroundColor: '#fff5f0', border: '1.5px solid #fc8019', padding: '14px', borderRadius: 12, textAlign: 'center' }}>
+                  <span style={{ fontSize: 13, color: '#d95300', fontWeight: 900, display: 'block' }}>🛡️ ADMIN ACCESS DETECTED</span>
+                  <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#686b78' }}>
+                    Enter Master Admin Security PIN:
                   </p>
                 </div>
               ) : (
-                /* Customer OTP */
-                <div style={{ backgroundColor: '#e5f7f1', border: '1.5px solid #0f8a65', padding: '12px', borderRadius: 10, textAlign: 'center' }}>
-                  <span style={{ fontSize: 12, color: '#0f8a65', fontWeight: 800, display: 'block' }}>CUSTOMER VERIFICATION CODE:</span>
-                  <span style={{ fontSize: 28, color: '#0f8a65', fontWeight: 900, letterSpacing: 6 }}>{generatedOtp}</span>
-                  <p style={{ margin: '4px 0 0 0', fontSize: 11, color: '#555' }}>Enter the 6 digits below to view the menu</p>
+                <div style={{ backgroundColor: '#fff5f0', border: '1.5px solid #fc8019', padding: '14px', borderRadius: 12, textAlign: 'center' }}>
+                  <span style={{ fontSize: 12, color: '#fc8019', fontWeight: 900, display: 'block', textTransform: 'uppercase' }}>Your OTP Code:</span>
+                  <span style={{ fontSize: 30, color: '#fc8019', fontWeight: 900, letterSpacing: 8 }}>{generatedOtp}</span>
+                  <p style={{ margin: '4px 0 0 0', fontSize: 11, color: '#7e808c' }}>Enter the 6 digits below to enter</p>
                 </div>
               )}
 
@@ -542,14 +543,14 @@ export default function App() {
                   placeholder={isAdminLoginAttempt ? 'Enter Admin PIN' : '• • • • • •'}
                   value={enteredCode}
                   onChange={e => setEnteredCode(e.target.value)}
-                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: `2px solid ${isAdminLoginAttempt ? '#ef4444' : '#0f8a65'}`, fontSize: 20, textAlign: 'center', letterSpacing: 4, fontWeight: 800, boxSizing: 'border-box', outline: 'none' }}
+                  style={{ width: '100%', padding: '14px', borderRadius: 10, border: '2px solid #fc8019', fontSize: 22, textAlign: 'center', letterSpacing: 4, fontWeight: 900, boxSizing: 'border-box', outline: 'none' }}
                 />
               </div>
 
               <button
                 type="submit"
-                style={{ backgroundColor: isAdminLoginAttempt ? '#dc2626' : '#0f8a65', color: '#ffffff', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-                {isAdminLoginAttempt ? 'Unlock Admin Dashboard' : 'Verify & Enter Home Like Food'}
+                style={{ backgroundColor: '#fc8019', color: '#ffffff', border: 'none', padding: '14px', borderRadius: 10, fontWeight: 900, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 14px rgba(252, 128, 25, 0.35)' }}>
+                {isAdminLoginAttempt ? 'Unlock Admin Controls' : 'Verify & Browse Menu'}
               </button>
 
               <button
@@ -566,153 +567,269 @@ export default function App() {
   }
 
   // =========================================================
-  // VIEW 2: LOGGED IN INTERFACE
+  // VIEW 2: SWIGGY-STYLE RESTAURANT & DELIVERY EXPERIENCE
   // =========================================================
   return (
-    <div style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif', backgroundColor: '#f4f5f7', minHeight: '100vh', margin: 0, paddingBottom: 110 }}>
+    <div style={{ fontFamily: 'Basis Grotesque Pro, system-ui, -apple-system, sans-serif', backgroundColor: '#f4f5f7', minHeight: '100vh', margin: 0, paddingBottom: 110 }}>
       
-      {/* Header */}
-      <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e0e0e0', position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-        <div style={{ maxWidth: 850, margin: '0 auto', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* Swiggy Style Sticky Top Navbar */}
+      <header style={{ backgroundColor: '#ffffff', position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
+        <div style={{ maxWidth: 860, margin: '0 auto', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: '50%', backgroundColor: '#0f8a65', color: '#ffffff', fontSize: 22, fontWeight: 900, boxShadow: '0 2px 6px rgba(15,138,101,0.3)' }}>
-              L
+          {/* Logo Brand with Cloche Badge */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 44,
+              height: 44,
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #fc8019 0%, #ff5200 100%)',
+              color: '#ffffff',
+              fontSize: 22,
+              boxShadow: '0 4px 12px rgba(252, 128, 25, 0.3)'
+            }}>
+              🍲
             </div>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 900, color: '#282c3f', letterSpacing: '1px', lineHeight: 1.1 }}>HOME LIKE FOOD</div>
-              <div style={{ fontSize: 11, color: '#7e808c', marginTop: 1 }}>{user.name} {isAdmin ? '🛡️ (Admin)' : '👤'}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 16, fontWeight: 900, color: '#282c3f', letterSpacing: '-0.3px' }}>LASAR</span>
+                <span style={{ fontSize: 10, fontWeight: 800, backgroundColor: '#fc8019', color: '#fff', padding: '2px 6px', borderRadius: 4 }}>HOME FOOD</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#7e808c', marginTop: 1 }}>
+                📍 Fresh Home Delivery • {user.name} {isAdmin ? '🛡️' : ''}
+              </div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {isAdmin && (
               <>
-                <button onClick={() => { setActiveTab('customer'); fetchMenu(); }} style={{ padding: '6px 10px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, backgroundColor: activeTab === 'customer' ? '#0f8a65' : '#f0f0f5', color: activeTab === 'customer' ? '#fff' : '#3d4152' }}>
+                <button onClick={() => { setActiveTab('customer'); fetchMenu(); }} style={{ padding: '7px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 12, backgroundColor: activeTab === 'customer' ? '#fc8019' : '#f0f0f5', color: activeTab === 'customer' ? '#fff' : '#3d4152' }}>
                   🍽️ Menu
                 </button>
-                <button onClick={() => { setActiveTab('partner'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, backgroundColor: activeTab === 'partner' ? '#0f8a65' : '#f0f0f5', color: activeTab === 'partner' ? '#fff' : '#3d4152' }}>
+                <button onClick={() => { setActiveTab('partner'); fetchOrders(); }} style={{ padding: '7px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 12, backgroundColor: activeTab === 'partner' ? '#fc8019' : '#f0f0f5', color: activeTab === 'partner' ? '#fff' : '#3d4152' }}>
                   👨‍🍳 Kitchen ({orders.length})
                 </button>
-                <button onClick={() => { setActiveTab('admin'); fetchAuditData(); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, backgroundColor: activeTab === 'admin' ? '#282c3f' : '#f0f0f5', color: activeTab === 'admin' ? '#fff' : '#3d4152' }}>
+                <button onClick={() => { setActiveTab('admin'); fetchAuditData(); fetchOrders(); }} style={{ padding: '7px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 12, backgroundColor: activeTab === 'admin' ? '#282c3f' : '#f0f0f5', color: activeTab === 'admin' ? '#fff' : '#3d4152' }}>
                   🛡️ Admin
                 </button>
               </>
             )}
 
-            <button onClick={handleLogout} style={{ padding: '6px 10px', borderRadius: 20, border: '1px solid #ffcdd2', backgroundColor: '#ffebee', color: '#c62828', cursor: 'pointer', fontWeight: 700, fontSize: 11 }}>
+            <button onClick={handleLogout} style={{ padding: '7px 12px', borderRadius: 20, border: '1px solid #ffd8cc', backgroundColor: '#fff2ed', color: '#fc8019', cursor: 'pointer', fontWeight: 800, fontSize: 12 }}>
               Logout
             </button>
           </div>
         </div>
 
-        <div style={{ backgroundColor: apiConnected ? '#e5f7f1' : '#ffebee', padding: '3px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: apiConnected ? '#0f8a65' : '#c62828' }}>
-          {apiConnected ? '● Online Delivery Active' : '○ Cloud Kitchen Online (Ready)'}
+        <div style={{ backgroundColor: apiConnected ? '#eaf8f2' : '#fff5f0', padding: '4px 16px', textAlign: 'center', fontSize: 11, fontWeight: 800, color: apiConnected ? '#0f8a65' : '#fc8019' }}>
+          {apiConnected ? '● Cloud Kitchen Online • Accepting Orders' : '○ Connecting to Kitchen Server...'}
         </div>
       </header>
 
-      {/* Main View Area */}
-      <main style={{ maxWidth: 750, margin: '16px auto', padding: '0 14px' }}>
+      {/* Main Container */}
+      <main style={{ maxWidth: 860, margin: '18px auto', padding: '0 16px' }}>
 
-        {/* 1. CUSTOMER MENU */}
+        {/* 1. CUSTOMER SWIGGY MENU VIEW */}
         {activeTab === 'customer' && (
           <div>
+            {/* LIVE ACTIVE ORDER TRACKING HERO */}
             {activeCustomerOrder && (
-              <div style={{ backgroundColor: '#ffffff', borderRadius: 12, padding: 16, marginBottom: 16, borderLeft: '6px solid #0f8a65', boxShadow: '0 3px 12px rgba(0,0,0,0.08)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{
+                backgroundColor: '#ffffff',
+                borderRadius: 16,
+                padding: 20,
+                marginBottom: 20,
+                boxShadow: '0 4px 20px rgba(0,0,0,0.06)',
+                borderLeft: `8px solid ${activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#fc8019'}`
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
                   <div>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: '#0f8a65', textTransform: 'uppercase' }}>Active Delivery</span>
-                    <h3 style={{ margin: '2px 0', fontSize: 16, color: '#282c3f' }}>Order #{activeCustomerOrder.orderId}</h3>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 900,
+                      color: activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#fc8019',
+                      letterSpacing: 1,
+                      textTransform: 'uppercase'
+                    }}>
+                      {activeCustomerOrder.paymentConfirmed ? '🎉 ORDER PLACED & VERIFIED' : '⏳ PAYMENT VERIFICATION PENDING'}
+                    </span>
+                    <h3 style={{ margin: '4px 0 2px 0', fontSize: 18, color: '#282c3f' }}>Order #{activeCustomerOrder.orderId}</h3>
+                    <p style={{ margin: 0, fontSize: 12, color: '#7e808c' }}>
+                      Delivery to: <strong>{activeCustomerOrder.deliveryArea || 'Home'}</strong>, {activeCustomerOrder.address}
+                    </p>
                   </div>
+
                   <div style={{ textAlign: 'right' }}>
-                    <span style={{ fontSize: 11, color: '#777' }}>Verification OTP:</span>
-                    <div style={{ fontSize: 16, fontWeight: 900, color: '#0f8a65' }}>{activeCustomerOrder.otp}</div>
+                    <span style={{ fontSize: 11, color: '#7e808c', display: 'block' }}>Delivery Passcode</span>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#282c3f' }}>{activeCustomerOrder.otp}</div>
                   </div>
                 </div>
 
-                <div style={{ margin: '12px 0 8px 0', backgroundColor: '#f0f0f5', borderRadius: 8, height: 8, overflow: 'hidden' }}>
+                {/* Prominent Delivery Time Slot Window */}
+                {activeCustomerOrder.deliverySlot ? (
+                  <div style={{
+                    marginTop: 14,
+                    backgroundColor: '#eaf8f2',
+                    border: '1.5px solid #a3e6cb',
+                    borderRadius: 10,
+                    padding: '10px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10
+                  }}>
+                    <span style={{ fontSize: 20 }}>🕒</span>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 900, color: '#0f8a65', textTransform: 'uppercase' }}>
+                        Estimated Delivery Time Slot
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 900, color: '#065f46' }}>
+                        {activeCustomerOrder.deliverySlot}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{
+                    marginTop: 14,
+                    backgroundColor: '#fff7ed',
+                    border: '1.5px solid #ffedd5',
+                    borderRadius: 10,
+                    padding: '10px 14px',
+                    fontSize: 12,
+                    color: '#c2410c',
+                    fontWeight: 700
+                  }}>
+                    🕒 Admin is verifying your payment in bank. Delivery time slot will appear here once verified.
+                  </div>
+                )}
+
+                {/* Progress bar */}
+                <div style={{ margin: '16px 0 8px 0', backgroundColor: '#f0f0f5', borderRadius: 8, height: 8, overflow: 'hidden' }}>
                   <div style={{ 
                     height: '100%', 
-                    backgroundColor: '#0f8a65', 
-                    width: activeCustomerOrder.status === 'Order Received' ? '25%' :
-                           activeCustomerOrder.status === 'Food is being prepared' ? '50%' :
-                           activeCustomerOrder.status === 'Food Ready' ? '75%' : '90%',
-                    transition: 'width 0.4s ease'
+                    backgroundColor: activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#fc8019', 
+                    width: !activeCustomerOrder.paymentConfirmed ? '20%' :
+                           activeCustomerOrder.status === 'Order Placed' ? '40%' :
+                           activeCustomerOrder.status === 'Food is being prepared' ? '65%' :
+                           activeCustomerOrder.status === 'Food Ready' ? '80%' : '95%',
+                    transition: 'width 0.5s ease'
                   }}></div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
-                  <span style={{ fontWeight: 800, color: '#282c3f' }}>Status: {activeCustomerOrder.status}</span>
-                  <span style={{ color: '#777', fontSize: 12 }}>Delivering to: {activeCustomerOrder.address}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, fontWeight: 800, color: '#282c3f' }}>
+                  <span>Status: {activeCustomerOrder.status}</span>
+                  <span style={{ color: activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#fc8019' }}>
+                    {activeCustomerOrder.paymentConfirmed ? '✓ Bank Payment Confirmed' : 'Checking Bank Records...'}
+                  </span>
                 </div>
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+            {/* Restaurant Cover Banner (Swiggy Style) */}
+            <div style={{
+              background: 'linear-gradient(135deg, #1e222b 0%, #282c3f 100%)',
+              color: '#ffffff',
+              borderRadius: 20,
+              padding: '24px',
+              marginBottom: 20,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h1 style={{ margin: '0 0 6px 0', fontSize: 24, fontWeight: 900 }}>LASAR Home Food</h1>
+                  <p style={{ margin: '0 0 12px 0', fontSize: 13, color: '#d4d5d9' }}>North Indian • Homestyle Thalis • Healthy & Fresh</p>
+                  <div style={{ display: 'flex', gap: 14, fontSize: 12, fontWeight: 800 }}>
+                    <span style={{ backgroundColor: '#0f8a65', color: '#fff', padding: '3px 8px', borderRadius: 6 }}>★ 4.8</span>
+                    <span>🕒 30-40 MINS</span>
+                    <span>💰 ₹100 for two</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: 52 }}>🍲</div>
+              </div>
+            </div>
+
+            {/* Search and Veg Toggle Filter */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
               <input
                 type="text"
-                placeholder="Search food items..."
+                placeholder="Search for dishes, thalis, desserts..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                style={{ flex: 1, padding: '10px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, outline: 'none' }}
+                style={{ flex: 1, padding: '12px 16px', borderRadius: 12, border: '1px solid #e2e8f0', backgroundColor: '#ffffff', fontSize: 14, outline: 'none', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}
               />
               <button
                 onClick={() => setFilterVegOnly(!filterVegOnly)}
-                style={{ padding: '8px 14px', borderRadius: 10, border: `2px solid ${filterVegOnly ? '#0f8a65' : '#e0e0e0'}`, backgroundColor: filterVegOnly ? '#e5f7f1' : '#fff', color: filterVegOnly ? '#0f8a65' : '#3d4152', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>
-                🟢 Veg Only
+                style={{ padding: '10px 16px', borderRadius: 12, border: `2px solid ${filterVegOnly ? '#0f8a65' : '#e2e8f0'}`, backgroundColor: filterVegOnly ? '#eaf8f2' : '#ffffff', color: filterVegOnly ? '#0f8a65' : '#3d4152', fontWeight: 800, cursor: 'pointer', fontSize: 13 }}>
+                🟢 Veg
               </button>
             </div>
 
-            <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 10, marginBottom: 16 }}>
+            {/* Category Pills */}
+            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 18 }}>
               {categories.map(cat => (
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid #e0e0e0', backgroundColor: selectedCategory === cat ? '#0f8a65' : '#ffffff', color: selectedCategory === cat ? '#ffffff' : '#3d4152', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 24,
+                    border: 'none',
+                    backgroundColor: selectedCategory === cat ? '#fc8019' : '#ffffff',
+                    color: selectedCategory === cat ? '#ffffff' : '#3d4152',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.04)',
+                    transition: 'all 0.2s'
+                  }}>
                   {cat}
                 </button>
               ))}
             </div>
 
+            {/* Food Menu Items */}
             {filteredDishes.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '50px 20px', backgroundColor: '#fff', borderRadius: 14 }}>
-                <div style={{ fontSize: 44, marginBottom: 12 }}>🍲</div>
-                <h3 style={{ margin: '0 0 6px 0', color: '#282c3f', fontSize: 18 }}>No Live Dishes Right Now</h3>
-                <p style={{ margin: 0, color: '#7e808c', fontSize: 13 }}>Items appear here after Quality Audit approval.</p>
+              <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#fff', borderRadius: 16 }}>
+                <div style={{ fontSize: 48, marginBottom: 10 }}>🍲</div>
+                <h3 style={{ margin: '0 0 4px 0', color: '#282c3f', fontSize: 18 }}>Kitchen Menu is Updating</h3>
+                <p style={{ margin: 0, color: '#7e808c', fontSize: 13 }}>Dishes will appear here once approved by Admin.</p>
               </div>
             ) : (
-              <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '18px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-                <h2 style={{ fontSize: 16, color: '#282c3f', margin: '0 0 16px 0', fontWeight: 800 }}>Certified Dishes ({filteredDishes.length})</h2>
+              <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                <h2 style={{ fontSize: 18, color: '#282c3f', margin: '0 0 20px 0', fontWeight: 900 }}>
+                  Recommended Dishes ({filteredDishes.length})
+                </h2>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
                   {filteredDishes.map((dish, idx) => {
                     const dishId = dish._id || dish.id;
                     const cartItem = cart.find(c => (c._id || c.id) === dishId);
                     return (
-                      <div key={dishId} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 18, borderBottom: idx !== filteredDishes.length - 1 ? '1px solid #f0f0f5' : 'none', gap: 14 }}>
+                      <div key={dishId} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 22, borderBottom: idx !== filteredDishes.length - 1 ? '1px solid #f0f0f5' : 'none', gap: 16 }}>
                         <div style={{ flex: 1 }}>
-                          <span style={{ display: 'inline-block', width: 13, height: 13, border: `2px solid ${dish.isVeg ? '#0f8a65' : '#e43b4f'}`, padding: 2, boxSizing: 'border-box' }}>
-                            <span style={{ display: 'block', width: 5, height: 5, borderRadius: '50%', backgroundColor: dish.isVeg ? '#0f8a65' : '#e43b4f' }}></span>
+                          <span style={{ display: 'inline-block', width: 14, height: 14, border: `2px solid ${dish.isVeg ? '#0f8a65' : '#e43b4f'}`, padding: 2, boxSizing: 'border-box' }}>
+                            <span style={{ display: 'block', width: 6, height: 6, borderRadius: '50%', backgroundColor: dish.isVeg ? '#0f8a65' : '#e43b4f' }}></span>
                           </span>
-                          <h3 style={{ margin: '3px 0', fontSize: 15, color: '#3e4152', fontWeight: 700 }}>{dish.name}</h3>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: '#3e4152', marginBottom: 6 }}>₹{dish.price}</div>
-                          <p style={{ margin: 0, fontSize: 12, color: '#7e808c', lineHeight: 1.3 }}>{dish.description}</p>
-                          <div style={{ marginTop: 6, display: 'inline-block', backgroundColor: '#e5f7f1', color: '#0f8a65', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4 }}>
-                            ✓ TASTE AUDIT PASSED
-                          </div>
+                          <h3 style={{ margin: '4px 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 800 }}>{dish.name}</h3>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: '#3e4152', marginBottom: 6 }}>₹{dish.price}</div>
+                          <p style={{ margin: 0, fontSize: 13, color: '#7e808c', lineHeight: 1.4 }}>{dish.description}</p>
                         </div>
 
-                        <div style={{ position: 'relative', width: 110, height: 95, flexShrink: 0 }}>
-                          <img src={dish.image} alt={dish.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 10 }} />
-                          <div style={{ position: 'absolute', bottom: -10, left: '50%', transform: 'translateX(-50%)', width: '85%' }}>
+                        {/* Image + Swiggy Style ADD Counter Button */}
+                        <div style={{ position: 'relative', width: 120, height: 105, flexShrink: 0 }}>
+                          <img src={dish.image} alt={dish.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 14 }} />
+                          <div style={{ position: 'absolute', bottom: -12, left: '50%', transform: 'translateX(-50%)', width: '90%' }}>
                             {cartItem ? (
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#ffffff', border: '1px solid #d4d5d9', borderRadius: 6, padding: '3px 6px', boxShadow: '0 2px 6px rgba(0,0,0,0.1)' }}>
-                                <button onClick={() => removeFromCart(dishId)} style={{ border: 'none', background: 'none', color: '#0f8a65', fontSize: 14, fontWeight: 800, cursor: 'pointer' }}>-</button>
-                                <span style={{ fontSize: 12, fontWeight: 800, color: '#0f8a65' }}>{cartItem.qty}</span>
-                                <button onClick={() => addToCart(dish)} style={{ border: 'none', background: 'none', color: '#0f8a65', fontSize: 14, fontWeight: 800, cursor: 'pointer' }}>+</button>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#ffffff', border: '1px solid #d4d5d9', borderRadius: 8, padding: '4px 8px', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
+                                <button onClick={() => removeFromCart(dishId)} style={{ border: 'none', background: 'none', color: '#fc8019', fontSize: 16, fontWeight: 900, cursor: 'pointer' }}>-</button>
+                                <span style={{ fontSize: 13, fontWeight: 900, color: '#fc8019' }}>{cartItem.qty}</span>
+                                <button onClick={() => addToCart(dish)} style={{ border: 'none', background: 'none', color: '#fc8019', fontSize: 16, fontWeight: 900, cursor: 'pointer' }}>+</button>
                               </div>
                             ) : (
-                              <button onClick={() => addToCart(dish)} style={{ width: '100%', backgroundColor: '#ffffff', color: '#0f8a65', border: '1px solid #0f8a65', borderRadius: 6, padding: '5px 0', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.1)' }}>
+                              <button onClick={() => addToCart(dish)} style={{ width: '100%', backgroundColor: '#ffffff', color: '#fc8019', border: '1px solid #fc8019', borderRadius: 8, padding: '7px 0', fontWeight: 900, fontSize: 13, cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
                                 ADD
                               </button>
                             )}
@@ -730,68 +847,89 @@ export default function App() {
         {/* 2. ADMIN KITCHEN DISPATCH */}
         {isAdmin && activeTab === 'partner' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', borderTop: '4px solid #0f8a65' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', borderTop: '5px solid #fc8019' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                 <div>
-                  <h2 style={{ margin: '0 0 2px 0', fontSize: 18, color: '#282c3f' }}>Kitchen Live Orders ({orders.length})</h2>
-                  <p style={{ margin: 0, fontSize: 12, color: '#7e808c' }}>Marking "Delivered" deletes customer details permanently from database.</p>
+                  <h2 style={{ margin: '0 0 2px 0', fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Kitchen Orders Dispatch ({orders.length})</h2>
+                  <p style={{ margin: 0, fontSize: 12, color: '#7e808c' }}>Verify bank credit first, set delivery window, then mark delivered.</p>
                 </div>
-                <button onClick={fetchOrders} style={{ padding: '4px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Refresh</button>
+                <button onClick={fetchOrders} style={{ padding: '6px 12px', fontSize: 12, borderRadius: 8, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
               </div>
 
               {orders.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '20px 0', color: '#7e808c', fontSize: 13 }}>
-                  🎉 No active orders. Storage is 100% clean.
+                <div style={{ textAlign: 'center', padding: '30px 0', color: '#7e808c', fontSize: 14 }}>
+                  🎉 No active orders. Storage is clean!
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   {orders.map(order => (
-                    <div key={order.orderId} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #eee', paddingBottom: 8, marginBottom: 8 }}>
+                    <div key={order.orderId} style={{ border: '1.5px solid #e2e8f0', borderRadius: 12, padding: 16, backgroundColor: '#ffffff' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 10, marginBottom: 10 }}>
                         <div>
-                          <span style={{ fontSize: 13, fontWeight: 800, color: '#0f8a65' }}>#{order.orderId}</span>
-                          <span style={{ marginLeft: 8, fontSize: 11, backgroundColor: '#eee', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>{order.status}</span>
+                          <span style={{ fontSize: 14, fontWeight: 900, color: '#282c3f' }}>#{order.orderId}</span>
+                          <span style={{
+                            marginLeft: 8,
+                            fontSize: 11,
+                            backgroundColor: order.paymentConfirmed ? '#eaf8f2' : '#fff5f0',
+                            color: order.paymentConfirmed ? '#0f8a65' : '#fc8019',
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            fontWeight: 800
+                          }}>
+                            {order.paymentConfirmed ? '✓ Bank Payment Confirmed' : '⚠️ Payment Needs Verification'}
+                          </span>
                         </div>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: '#0f8a65' }}>₹{order.totalAmount} (ONLINE PAID)</div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
                       </div>
 
-                      <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 10, marginBottom: 10 }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: '#282c3f' }}>👤 Customer: {order.customerName}</div>
-                        <div style={{ fontSize: 13, color: '#282c3f', marginTop: 2 }}>
-                          📞 Phone: <a href={`tel:${order.phone}`} style={{ color: '#0f8a65', fontWeight: 800 }}>{order.phone}</a>
+                      {/* Customer Delivery Details */}
+                      <div style={{ backgroundColor: '#f8fafc', borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
+                        <div>👤 <strong>Customer:</strong> {order.customerName} (📞 <a href={`tel:${order.phone}`} style={{ color: '#fc8019', fontWeight: 800 }}>{order.phone}</a>)</div>
+                        <div>📍 <strong>Delivery Area:</strong> <span style={{ color: '#fc8019', fontWeight: 800 }}>{order.deliveryArea || 'Not specified'}</span></div>
+                        <div>🏠 <strong>Complete Address:</strong> {order.address}</div>
+                        <div>🚩 <strong>Nearest Landmark:</strong> {order.landmark || 'N/A'}</div>
+                        <div style={{ marginTop: 4, color: '#1e293b' }}>
+                          💳 <strong>Customer Entered UTR:</strong> <span style={{ backgroundColor: '#ffedd5', padding: '2px 6px', borderRadius: 4, fontWeight: 800 }}>{order.transactionRef || order.paymentMethod}</span>
                         </div>
-                        <div style={{ fontSize: 13, color: '#444', marginTop: 2 }}>📍 <strong>Address:</strong> {order.address}</div>
-                        <div style={{ fontSize: 12, color: '#166534', marginTop: 4, fontWeight: 800 }}>
-                          💳 Paid Online on 7379434080 (UTR: {order.paymentMethod})
-                        </div>
-                        <div style={{ fontSize: 12, color: '#0f8a65', marginTop: 4, fontWeight: 800 }}>🔐 Verification OTP: {order.otp}</div>
+                        {order.deliverySlot && (
+                          <div style={{ marginTop: 4, color: '#0f8a65', fontWeight: 800 }}>
+                            🕒 <strong>Active Delivery Window:</strong> {order.deliverySlot}
+                          </div>
+                        )}
+                        <div style={{ marginTop: 4, color: '#0f8a65', fontWeight: 800 }}>🔐 Verification OTP: {order.otp}</div>
                       </div>
 
-                      <div style={{ fontSize: 12, color: '#686b78', marginBottom: 10 }}>
-                        <strong>Items:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                      <div style={{ fontSize: 12, color: '#686b78', marginBottom: 12 }}>
+                        <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                       </div>
 
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Food is being prepared')}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Food is being prepared' ? '#0f8a65' : '#f0f0f5', color: order.status === 'Food is being prepared' ? '#fff' : '#333', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
-                          🍳 Preparing
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Food Ready')}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Food Ready' ? '#0f8a65' : '#f0f0f5', color: order.status === 'Food Ready' ? '#fff' : '#333', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
-                          📦 Food Ready
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Out for Delivery')}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Out for Delivery' ? '#0f8a65' : '#f0f0f5', color: order.status === 'Out for Delivery' ? '#fff' : '#333', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
-                          🛵 Out for Delivery
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
-                          style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                          ✓ Mark Delivered & Delete Customer Details
-                        </button>
+                      {/* Admin Workflow Buttons */}
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {!order.paymentConfirmed ? (
+                          <button
+                            onClick={() => handleConfirmPaymentAndAccept(order.orderId)}
+                            style={{ backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
+                            ✓ Confirm Bank Payment Received & Accept Order
+                          </button>
+                        ) : (
+                          <>
+                            <button 
+                              onClick={() => handleUpdateOrderStatus(order.orderId, 'Food is being prepared')}
+                              style={{ padding: '8px 12px', borderRadius: 8, border: 'none', backgroundColor: order.status === 'Food is being prepared' ? '#fc8019' : '#f0f0f5', color: order.status === 'Food is being prepared' ? '#fff' : '#333', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                              🍳 Preparing Food
+                            </button>
+                            <button 
+                              onClick={() => handleUpdateOrderStatus(order.orderId, 'Out for Delivery')}
+                              style={{ padding: '8px 12px', borderRadius: 8, border: 'none', backgroundColor: order.status === 'Out for Delivery' ? '#fc8019' : '#f0f0f5', color: order.status === 'Out for Delivery' ? '#fff' : '#333', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                              🛵 Out for Delivery
+                            </button>
+                            <button 
+                              onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
+                              style={{ padding: '8px 14px', borderRadius: 8, border: 'none', backgroundColor: '#282c3f', color: '#fff', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
+                              ✓ Mark Delivered & Clear Data
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -800,58 +938,58 @@ export default function App() {
             </div>
 
             {/* Dish Upload Form */}
-            <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-              <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Partner Dish Upload</h2>
+            <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+              <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Kitchen Dish Upload</h2>
               <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#7e808c' }}>Submit dish samples for Quality & Taste Audit.</p>
 
               <form onSubmit={handlePartnerUpload} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Dish Name *</label>
-                  <input required type="text" placeholder="e.g. Special Home Thali" value={newDish.name} onChange={e => setNewDish({ ...newDish, name: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Dish Name *</label>
+                  <input required type="text" placeholder="e.g. Special Paneer Thali" value={newDish.name} onChange={e => setNewDish({ ...newDish, name: e.target.value })} style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
                 </div>
 
                 <div style={{ display: 'flex', gap: 10 }}>
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Price (₹) *</label>
-                    <input required type="number" placeholder="60" value={newDish.price} onChange={e => setNewDish({ ...newDish, price: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Price (₹) *</label>
+                    <input required type="number" placeholder="80" value={newDish.price} onChange={e => setNewDish({ ...newDish, price: e.target.value })} style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Category</label>
-                    <select value={newDish.category} onChange={e => setNewDish({ ...newDish, category: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Category</label>
+                    <select value={newDish.category} onChange={e => setNewDish({ ...newDish, category: e.target.value })} style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }}>
                       {categories.filter(c => c !== 'All').map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Dietary Type</label>
-                  <select value={newDish.isVeg ? 'veg' : 'nonveg'} onChange={e => setNewDish({ ...newDish, isVeg: e.target.value === 'veg' })} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }}>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Dietary Type</label>
+                  <select value={newDish.isVeg ? 'veg' : 'nonveg'} onChange={e => setNewDish({ ...newDish, isVeg: e.target.value === 'veg' })} style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }}>
                     <option value="veg">🟢 Pure Veg</option>
                     <option value="nonveg">🔴 Non-Veg</option>
                   </select>
                 </div>
 
-                <div style={{ border: '2px dashed #0f8a65', padding: '14px', borderRadius: 10, backgroundColor: '#f0fdf4', textAlign: 'center' }}>
-                  <label style={{ display: 'block', fontSize: 13, fontWeight: 800, color: '#0f8a65', marginBottom: 8, cursor: 'pointer' }}>
-                    📷 Select Photo from Phone Gallery or Camera
+                <div style={{ border: '2px dashed #fc8019', padding: '16px', borderRadius: 10, backgroundColor: '#fff9f5', textAlign: 'center' }}>
+                  <label style={{ display: 'block', fontSize: 13, fontWeight: 800, color: '#fc8019', marginBottom: 8, cursor: 'pointer' }}>
+                    📷 Choose Dish Photo (Gallery / Camera)
                     <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
                   </label>
                   {newDish.image ? (
                     <div style={{ marginTop: 8 }}>
-                      <img src={newDish.image} alt="Dish Preview" style={{ width: 120, height: 100, objectFit: 'cover', borderRadius: 8, border: '2px solid #0f8a65' }} />
-                      <div style={{ fontSize: 11, color: '#0f8a65', fontWeight: 700, marginTop: 4 }}>✓ Photo Ready</div>
+                      <img src={newDish.image} alt="Preview" style={{ width: 120, height: 100, objectFit: 'cover', borderRadius: 8, border: '2px solid #fc8019' }} />
+                      <div style={{ fontSize: 11, color: '#0f8a65', fontWeight: 800, marginTop: 4 }}>✓ Photo Ready</div>
                     </div>
                   ) : (
-                    <p style={{ margin: 0, fontSize: 12, color: '#777' }}>Tap to select food image</p>
+                    <p style={{ margin: 0, fontSize: 12, color: '#777' }}>Tap here to attach photo</p>
                   )}
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Description</label>
-                  <textarea rows={2} placeholder="Ingredients and recipe details..." value={newDish.description} onChange={e => setNewDish({ ...newDish, description: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Description</label>
+                  <textarea rows={2} placeholder="Ingredients, recipe details..." value={newDish.description} onChange={e => setNewDish({ ...newDish, description: e.target.value })} style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
                 </div>
 
-                <button disabled={isSubmitting} type="submit" style={{ backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 8, fontSize: 14, fontWeight: 800, cursor: 'pointer', marginTop: 4 }}>
+                <button disabled={isSubmitting} type="submit" style={{ backgroundColor: '#fc8019', color: '#fff', border: 'none', padding: 14, borderRadius: 8, fontSize: 14, fontWeight: 900, cursor: 'pointer' }}>
                   {isSubmitting ? 'Uploading...' : 'Submit Dish for Taste & Quality Audit'}
                 </button>
               </form>
@@ -862,28 +1000,29 @@ export default function App() {
         {/* 3. MASTER ADMIN CONTROLS */}
         {isAdmin && activeTab === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', borderTop: '4px solid #282c3f' }}>
-              <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Taste & Quality Audit Queue ({auditQueue.pendingDishes.length})</h2>
-              <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#7e808c' }}>Approve or reject dishes before they appear on the menu.</p>
+            {/* Pending Audit */}
+            <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', borderTop: '5px solid #282c3f' }}>
+              <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Taste & Quality Audit ({auditQueue.pendingDishes.length})</h2>
+              <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#7e808c' }}>Approve dishes before they go live on customer menu.</p>
 
               {auditQueue.pendingDishes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '16px 0', color: '#7e808c', fontSize: 13 }}>No dishes awaiting approval.</div>
+                <div style={{ textAlign: 'center', padding: '20px 0', color: '#7e808c', fontSize: 13 }}>No dishes awaiting approval.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   {auditQueue.pendingDishes.map(dish => {
                     const dishId = dish._id || dish.id;
                     return (
-                      <div key={dishId} style={{ border: '1px solid #e0e0e0', borderRadius: 10, padding: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
-                        <img src={dish.image} alt={dish.name} style={{ width: 75, height: 65, borderRadius: 8, objectFit: 'cover' }} />
+                      <div key={dishId} style={{ border: '1px solid #e0e0e0', borderRadius: 10, padding: 14, display: 'flex', gap: 14, alignItems: 'center' }}>
+                        <img src={dish.image} alt={dish.name} style={{ width: 80, height: 70, borderRadius: 8, objectFit: 'cover' }} />
                         <div style={{ flex: 1 }}>
-                          <h4 style={{ margin: 0, fontSize: 14, color: '#282c3f' }}>{dish.name} • ₹{dish.price}</h4>
-                          <p style={{ margin: '2px 0', fontSize: 11, color: '#686b78' }}>{dish.description}</p>
+                          <h4 style={{ margin: 0, fontSize: 15, color: '#282c3f' }}>{dish.name} • ₹{dish.price}</h4>
+                          <p style={{ margin: '2px 0', fontSize: 12, color: '#686b78' }}>{dish.description}</p>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          <button onClick={() => handleAuditDecision(dishId, 'approved')} style={{ backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6, fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>
+                          <button onClick={() => handleAuditDecision(dishId, 'approved')} style={{ backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>
                             ✓ Approve
                           </button>
-                          <button onClick={() => handleAuditDecision(dishId, 'rejected')} style={{ backgroundColor: '#ffffff', color: '#e43b4f', border: '1px solid #e43b4f', padding: '6px 10px', borderRadius: 6, fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>
+                          <button onClick={() => handleAuditDecision(dishId, 'rejected')} style={{ backgroundColor: '#fff', color: '#e43b4f', border: '1px solid #e43b4f', padding: '6px 12px', borderRadius: 6, fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>
                             ✕ Reject
                           </button>
                         </div>
@@ -894,39 +1033,32 @@ export default function App() {
               )}
             </div>
 
-            <div style={{ backgroundColor: '#ffffff', borderRadius: 14, padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-              <div>
-                <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f' }}>Live Certified Menu ({auditQueue.approvedDishes.length})</h2>
-                <p style={{ margin: '0 0 16px 0', fontSize: 12, color: '#7e808c' }}>Modify prices or delete dishes from database.</p>
-              </div>
+            {/* Live Certified Dishes */}
+            <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+              <h2 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Live Certified Dishes ({auditQueue.approvedDishes.length})</h2>
+              <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#7e808c' }}>Edit dish prices or remove items completely.</p>
 
               {auditQueue.approvedDishes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '16px 0', color: '#7e808c', fontSize: 13 }}>No dishes currently live.</div>
+                <div style={{ textAlign: 'center', padding: '20px 0', color: '#7e808c', fontSize: 13 }}>No live dishes right now.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   {auditQueue.approvedDishes.map(dish => {
                     const dishId = dish._id || dish.id;
                     return (
-                      <div key={dishId} style={{ border: '1px solid #e8e8e8', backgroundColor: '#fafbfc', borderRadius: 10, padding: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
-                        <img src={dish.image} alt={dish.name} style={{ width: 75, height: 65, borderRadius: 8, objectFit: 'cover' }} />
+                      <div key={dishId} style={{ border: '1px solid #e8e8e8', backgroundColor: '#fafbfc', borderRadius: 10, padding: 14, display: 'flex', gap: 14, alignItems: 'center' }}>
+                        <img src={dish.image} alt={dish.name} style={{ width: 80, height: 70, borderRadius: 8, objectFit: 'cover' }} />
                         <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontSize: 11, color: dish.isVeg ? '#0f8a65' : '#e43b4f', fontWeight: 800 }}>{dish.isVeg ? '🟢 VEG' : '🔴 NON-VEG'}</span>
-                            <h4 style={{ margin: 0, fontSize: 15, color: '#282c3f' }}>{dish.name}</h4>
-                          </div>
-                          <div style={{ fontSize: 14, fontWeight: 800, color: '#0f8a65', marginTop: 2 }}>Current Price: ₹{dish.price}</div>
+                          <div style={{ fontSize: 11, color: dish.isVeg ? '#0f8a65' : '#e43b4f', fontWeight: 800 }}>{dish.isVeg ? '🟢 VEG' : '🔴 NON-VEG'}</div>
+                          <h4 style={{ margin: '2px 0', fontSize: 15, color: '#282c3f' }}>{dish.name}</h4>
+                          <div style={{ fontSize: 14, fontWeight: 900, color: '#fc8019' }}>₹{dish.price}</div>
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          <button
-                            onClick={() => handleUpdatePrice(dishId, dish.price)}
-                            style={{ backgroundColor: '#282c3f', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>
-                            ✏️ Edit Cost
+                          <button onClick={() => handleUpdatePrice(dishId, dish.price)} style={{ backgroundColor: '#282c3f', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>
+                            ✏️ Edit Price
                           </button>
-                          <button
-                            onClick={() => handleDeleteDish(dishId, dish.name)}
-                            style={{ backgroundColor: '#ffebee', color: '#c62828', border: '1px solid #ef9a9a', padding: '6px 12px', borderRadius: 6, fontWeight: 700, fontSize: 11, cursor: 'pointer' }}>
-                            🗑️ Delete Dish
+                          <button onClick={() => handleDeleteDish(dishId, dish.name)} style={{ backgroundColor: '#ffebee', color: '#c62828', border: '1px solid #ef9a9a', padding: '6px 12px', borderRadius: 6, fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>
+                            🗑️ Delete
                           </button>
                         </div>
                       </div>
@@ -939,98 +1071,100 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating Bottom Cart Bar */}
+      {/* Floating Bottom Cart (Swiggy Style) */}
       {cart.length > 0 && activeTab === 'customer' && (
-        <div style={{ position: 'fixed', bottom: 12, left: '50%', transform: 'translateX(-50%)', width: '92%', maxWidth: 600, backgroundColor: '#0f8a65', color: '#ffffff', borderRadius: 12, padding: '12px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 6px 20px rgba(15,138,101,0.3)', zIndex: 1000 }}>
+        <div style={{ position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', width: '92%', maxWidth: 640, backgroundColor: '#fc8019', color: '#ffffff', borderRadius: 14, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 8px 24px rgba(252, 128, 25, 0.4)', zIndex: 1000 }}>
           <div>
             <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8, opacity: 0.9 }}>{cart.reduce((a, b) => a + b.qty, 0)} Items Added</div>
-            <div style={{ fontSize: 16, fontWeight: 900 }}>₹{cartTotal}</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>₹{cartTotal}</div>
           </div>
-          <button onClick={() => setOrderModalOpen(true)} style={{ backgroundColor: 'transparent', color: '#ffffff', border: 'none', fontSize: 14, fontWeight: 800, cursor: 'pointer' }}>
-            PROCEED TO PAY & ORDER →
+          <button onClick={() => setOrderModalOpen(true)} style={{ backgroundColor: 'transparent', color: '#ffffff', border: 'none', fontSize: 14, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+            VIEW CART & CHECKOUT →
           </button>
         </div>
       )}
 
-      {/* Checkout Modal */}
+      {/* Checkout Modal with Area, Landmark & Admin UPI Payment */}
       {orderModalOpen && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 14 }}>
-          <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 440, padding: 22, maxHeight: '92vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#0f8a65', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 900 }}>L</div>
-                <h3 style={{ margin: 0, fontSize: 16, color: '#282c3f' }}>Online Checkout (Admin: {ADMIN_PHONE})</h3>
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 16 }}>
+          <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 460, padding: 24, maxHeight: '92vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 22 }}>🍲</span>
+                <h3 style={{ margin: 0, fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Delivery & Online Payment</h3>
               </div>
-              <button onClick={() => setOrderModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer' }}>✕</button>
+              <button onClick={() => setOrderModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: 20, cursor: 'pointer', color: '#7e808c' }}>✕</button>
             </div>
 
             <form onSubmit={handlePlaceOrder}>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 4 }}>Full Name</label>
-                <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Full Name</label>
+                <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 4 }}>Mobile Number (Strictly 10 Digits)</label>
-                <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="Enter 10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>10-Digit Mobile Number</label>
+                <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="Enter 10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 4 }}>Delivery Address (Street / Flat / House)</label>
-                <textarea required rows={2} placeholder="House number, floor, area..." value={customerForm.address} onChange={e => setCustomerForm({ ...customerForm, address: e.target.value })} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+              {/* Requirement 5: Specific Delivery Area */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#fc8019', marginBottom: 4 }}>Delivery Area / Locality / Sector *</label>
+                <input required type="text" placeholder="e.g. Sector 62 / Raj Nagar / Shastri Nagar" value={customerForm.deliveryArea} onChange={e => setCustomerForm({ ...customerForm, deliveryArea: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid #fc8019', boxSizing: 'border-box', backgroundColor: '#fffaf6' }} />
               </div>
 
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 4 }}>Nearest Famous Place / Landmark *</label>
-                <input required type="text" placeholder="e.g. Near City Hospital / Opp. Park" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Complete House / Flat Address</label>
+                <textarea required rows={2} placeholder="House number, floor, building name..." value={customerForm.address} onChange={e => setCustomerForm({ ...customerForm, address: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              <div style={{ backgroundColor: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 800, marginBottom: 4 }}>Nearest Landmark / Famous Place *</label>
+                <input required type="text" placeholder="e.g. Near City Hospital / Opp. Central Bank" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+              </div>
+
+              {/* Online Payment Box pointing to Admin Number */}
+              <div style={{ backgroundColor: '#fff9f5', border: '1.5px solid #fed7aa', borderRadius: 12, padding: 16, marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: '#166534' }}>PAYMENT: ONLINE UPI ONLY</span>
-                  <span style={{ fontSize: 15, fontWeight: 900, color: '#0f8a65' }}>₹{cartTotal}</span>
+                  <span style={{ fontSize: 12, fontWeight: 900, color: '#c2410c' }}>PAY ONLINE DIRECT TO ADMIN</span>
+                  <span style={{ fontSize: 17, fontWeight: 900, color: '#fc8019' }}>₹{cartTotal}</span>
                 </div>
                 
-                <p style={{ margin: '6px 0 10px 0', fontSize: 12, color: '#374151', lineHeight: 1.4 }}>
-                  Pay <strong>₹{cartTotal}</strong> to Admin:<br/>
-                  • Number: <strong>{ADMIN_PHONE}</strong><br/>
+                <p style={{ margin: '8px 0 10px 0', fontSize: 12, color: '#374151', lineHeight: 1.5 }}>
+                  Pay <strong>₹{cartTotal}</strong> to Admin Account:<br/>
+                  • Phone Number: <strong>{ADMIN_PHONE}</strong><br/>
                   • UPI ID: <strong>{ADMIN_UPI}</strong>
                 </p>
 
-                <div style={{ textAlign: 'center', margin: '8px 0', backgroundColor: '#fff', padding: 10, borderRadius: 8, display: 'inline-block', width: '100%', boxSizing: 'border-box' }}>
-                  <img 
-                    src={ADMIN_QR_CODE_URL} 
-                    alt="Admin UPI QR Code" 
-                    style={{ width: 145, height: 145, borderRadius: 8 }} 
-                  />
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#0f8a65', marginTop: 4 }}>
+                {/* Scannable Admin UPI QR */}
+                <div style={{ textAlign: 'center', margin: '8px 0', backgroundColor: '#fff', padding: 10, borderRadius: 10, display: 'inline-block', width: '100%', boxSizing: 'border-box' }}>
+                  <img src={ADMIN_QR_CODE_URL} alt="Admin UPI QR" style={{ width: 145, height: 145, borderRadius: 8 }} />
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#fc8019', marginTop: 4 }}>
                     Scan with PhonePe, Google Pay, or Paytm
                   </div>
                 </div>
 
-                <a
-                  href={upiPayString}
-                  style={{ display: 'block', textAlign: 'center', backgroundColor: '#0f8a65', color: '#fff', padding: '9px 0', borderRadius: 6, textDecoration: 'none', fontWeight: 800, fontSize: 12, marginBottom: 12 }}>
-                  ⚡ Tap to Pay via UPI App (PhonePe / GPay / Paytm)
+                <a href={upiPayString} style={{ display: 'block', textAlign: 'center', backgroundColor: '#fc8019', color: '#fff', padding: '10px 0', borderRadius: 8, textDecoration: 'none', fontWeight: 900, fontSize: 13, marginBottom: 12 }}>
+                  ⚡ Tap to Pay via Installed UPI App
                 </a>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#166534', marginBottom: 4 }}>
-                    Enter UPI Transaction ID / UTR Number *
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#c2410c', marginBottom: 4 }}>
+                    Enter 12-Digit UPI Transaction ID / UTR Number *
                   </label>
                   <input
                     required
                     type="text"
-                    placeholder="e.g. 12-digit UPI UTR number after payment"
+                    placeholder="Enter UTR reference after making payment"
                     value={customerForm.transactionRef}
                     onChange={e => setCustomerForm({ ...customerForm, transactionRef: e.target.value })}
-                    style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #86efac', backgroundColor: '#fff', boxSizing: 'border-box', fontSize: 12 }}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #fed7aa', backgroundColor: '#fff', boxSizing: 'border-box', fontSize: 13 }}
                   />
                 </div>
               </div>
 
-              <button type="submit" style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 12, borderRadius: 8, fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                Confirm Online Payment & Place Order
+              <button type="submit" style={{ width: '100%', backgroundColor: '#fc8019', color: '#fff', border: 'none', padding: 14, borderRadius: 10, fontWeight: 900, fontSize: 15, cursor: 'pointer', boxShadow: '0 4px 14px rgba(252, 128, 25, 0.35)' }}>
+                Submit Payment & Place Order
               </button>
             </form>
           </div>
