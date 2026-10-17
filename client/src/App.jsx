@@ -54,6 +54,10 @@ export default function App() {
   const [activeCustomerOrder, setActiveCustomerOrder] = useState(null);
   const [apiConnected, setApiConnected] = useState(false);
 
+  // Inline Admin Accept Slot Modal (Replaces broken window.prompt)
+  const [slotModalOrder, setSlotModalOrder] = useState(null);
+  const [customSlotInput, setCustomSlotInput] = useState('30-40 mins');
+
   // Partner dish upload
   const [newDish, setNewDish] = useState({
     name: '',
@@ -215,40 +219,49 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN VERIFIES ACTUAL BANK CREDIT & SETS TIME
-  const handleVerifyBankPaymentAndAccept = async (orderId) => {
-    const slot = window.prompt('Bank Credit Confirmed! Set delivery time slot (e.g. "30-40 mins" or "1:30 PM - 2:00 PM"):', '30-40 mins');
-    if (!slot || !slot.trim()) return;
+  // DIRECT VERIFY & ACCEPT SUBMISSION
+  const submitAcceptOrderWithSlot = async (slotValue) => {
+    if (!slotModalOrder) return;
+    const orderId = slotModalOrder.orderId;
+    const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
+    // 1. Optimistic Local State Update
+    setOrders(prev => prev.map(o => o.orderId === orderId ? {
+      ...o,
+      paymentConfirmed: true,
+      status: 'Order Placed',
+      deliverySlot: finalSlot
+    } : o));
+
+    setSlotModalOrder(null);
+
+    // 2. Persist to MongoDB API
     const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/verify-payment`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deliverySlot: slot.trim() })
+      body: JSON.stringify({ deliverySlot: finalSlot })
     });
 
-    if (res.ok && res.data?.order) {
-      alert(`Order #${orderId} verified and accepted! Customer tracking updated.`);
-      setOrders(prev => prev.map(o => o.orderId === orderId ? res.data.order : o));
-    } else {
-      alert('Error updating order.');
+    if (!res.ok) {
+      alert('Network issue syncing with database. Refreshing...');
       fetchOrders();
     }
   };
 
-  // ADMIN REJECTS UNPAID/FAKE ORDERS
+  // DIRECT REJECT & DELETE (Zero Prompt, Instant UI Wipe)
   const handleRejectUnpaidOrder = async (orderId) => {
-    if (!window.confirm(`Reject Order #${orderId}? Customer will be notified that payment was not received in bank.`)) return;
+    // 1. Wipe from screen immediately
+    setOrders(prev => prev.filter(o => o.orderId !== orderId));
+    if (activeCustomerOrder?.orderId === orderId) {
+      setActiveCustomerOrder(null);
+    }
 
-    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
+    // 2. Delete permanently from MongoDB Atlas
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'Cancelled' })
     });
-
-    if (res.ok) {
-      alert(`Order #${orderId} marked as Cancelled & removed.`);
-      fetchOrders();
-    }
   };
 
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
@@ -257,6 +270,8 @@ export default function App() {
       if (activeCustomerOrder?.orderId === orderId) {
         setActiveCustomerOrder(null);
       }
+    } else {
+      setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: newStatus } : o));
     }
 
     const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
@@ -381,7 +396,7 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // INITIATE PAYMENT: CREATES PENDING ORDER & LAUNCHES UPI
+  // USER PLACES ORDER -> OPENS UPI APP
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -394,7 +409,6 @@ export default function App() {
 
     setIsSubmittingOrder(true);
 
-    // Creates order in 'Payment Verification Pending' state
     const orderRes = await safeFetchJson(`${API_BASE}/api/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -418,7 +432,6 @@ export default function App() {
       setOrderModalOpen(false);
       fetchOrders();
 
-      // Launch UPI App to complete actual transfer
       const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
       window.location.href = upiUrl;
     } else {
@@ -475,13 +488,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setLoginMethod('mobile')}
-                  style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 13, backgroundColor: loginMethod === 'mobile' ? '#ffffff' : 'transparent', color: loginMethod === 'mobile' ? '#fc8019' : '#686b78', boxShadow: loginMethod === 'mobile' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none', transition: 'all 0.2s' }}>
+                  style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 13, backgroundColor: loginMethod === 'mobile' ? '#ffffff' : 'transparent', color: loginMethod === 'mobile' ? '#fc8019' : '#686b78', boxShadow: loginMethod === 'mobile' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none' }}>
                   📱 Mobile Login
                 </button>
                 <button
                   type="button"
                   onClick={() => setLoginMethod('gmail')}
-                  style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 13, backgroundColor: loginMethod === 'gmail' ? '#ffffff' : 'transparent', color: loginMethod === 'gmail' ? '#fc8019' : '#686b78', boxShadow: loginMethod === 'gmail' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none', transition: 'all 0.2s' }}>
+                  style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 13, backgroundColor: loginMethod === 'gmail' ? '#ffffff' : 'transparent', color: loginMethod === 'gmail' ? '#fc8019' : '#686b78', boxShadow: loginMethod === 'gmail' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none' }}>
                   ✉️ Gmail Login
                 </button>
               </div>
@@ -695,7 +708,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Status Banners */}
                 {activeCustomerOrder.status === 'Cancelled' ? (
                   <div style={{
                     marginTop: 12,
@@ -707,7 +719,7 @@ export default function App() {
                     color: '#991b1b',
                     fontWeight: 700
                   }}>
-                    ⚠️ We checked our bank account and could not find your payment. This order was cancelled.
+                    ⚠️ Payment was not received in bank account. This order was cancelled.
                   </div>
                 ) : !activeCustomerOrder.paymentConfirmed ? (
                   <div style={{
@@ -722,7 +734,7 @@ export default function App() {
                     lineHeight: 1.4
                   }}>
                     🔍 <strong>Verifying Bank Credit...</strong><br/>
-                    Admin is cross-checking incoming funds in their bank app. Your order will be accepted as soon as payment is confirmed.
+                    Admin is cross-checking incoming funds in their bank app. Your order will be confirmed once payment is approved.
                   </div>
                 ) : (
                   <div style={{
@@ -747,7 +759,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Progress Bar (Only advances after Admin verifies payment) */}
                 {activeCustomerOrder.status !== 'Cancelled' && (
                   <div style={{ margin: '14px 0 6px 0', backgroundColor: '#f0f0f5', borderRadius: 6, height: 6, overflow: 'hidden' }}>
                     <div style={{ 
@@ -864,7 +875,7 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
                   <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({orders.length})</h2>
-                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Check your bank app. Only verify after payment reflects in your account.</p>
+                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Cross-check bank credit. Confirm if received or Reject & Delete if unpaid.</p>
                 </div>
                 <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
               </div>
@@ -912,12 +923,12 @@ export default function App() {
                         <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                       </div>
 
-                      {/* Admin Gatekeeper Actions */}
+                      {/* Direct Buttons without Popup Prompt Failures */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {!order.paymentConfirmed ? (
                           <>
                             <button
-                              onClick={() => handleVerifyBankPaymentAndAccept(order.orderId)}
+                              onClick={() => { setSlotModalOrder(order); setCustomSlotInput('30-40 mins'); }}
                               style={{ padding: '8px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
                               ✓ Confirm Bank Credit & Accept Order
                             </button>
@@ -1154,6 +1165,69 @@ export default function App() {
                 {isSubmittingOrder ? 'Opening UPI App...' : `⚡ Open UPI App & Pay ₹${cartTotal}`}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MOBILE-NATIVE TIME SLOT MODAL (Completely Replaces window.prompt) */}
+      {slotModalOrder && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, padding: 16 }}>
+          <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 380, padding: 20, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ margin: '0 0 6px 0', fontSize: 17, color: '#282c3f', fontWeight: 900 }}>
+              Verify & Set Delivery Time
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: 12, color: '#686b78' }}>
+              Confirm credit for Order #{slotModalOrder.orderId} and select expected delivery window:
+            </p>
+
+            {/* Quick Touch Presets */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+              {['25-35 mins', '35-45 mins', '45-60 mins'].map(slot => (
+                <button
+                  key={slot}
+                  type="button"
+                  onClick={() => submitAcceptOrderWithSlot(slot)}
+                  style={{
+                    flex: 1,
+                    padding: '9px 4px',
+                    borderRadius: 8,
+                    border: '1.5px solid #0f8a65',
+                    backgroundColor: '#eaf8f2',
+                    color: '#0f8a65',
+                    fontWeight: 800,
+                    fontSize: 11,
+                    cursor: 'pointer'
+                  }}>
+                  {slot}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#282c3f', marginBottom: 4 }}>Or Custom Time Window</label>
+              <input
+                type="text"
+                placeholder="e.g. 1:15 PM - 1:45 PM"
+                value={customSlotInput}
+                onChange={e => setCustomSlotInput(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box', fontSize: 13 }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setSlotModalOrder(null)}
+                style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid #ccc', backgroundColor: '#f0f0f5', color: '#666', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => submitAcceptOrderWithSlot(customSlotInput)}
+                style={{ flex: 1.5, padding: '11px 0', borderRadius: 8, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontWeight: 900, fontSize: 13, cursor: 'pointer', boxShadow: '0 4px 10px rgba(15,138,101,0.25)' }}>
+                Confirm & Accept
+              </button>
+            </div>
           </div>
         </div>
       )}

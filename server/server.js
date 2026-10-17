@@ -36,7 +36,7 @@ const OrderSchema = new mongoose.Schema({
   landmark: { type: String, default: '' },
   items: Array,
   totalAmount: Number,
-  paymentConfirmed: { type: Boolean, default: false }, // Gated: False until Admin verifies bank receipt
+  paymentConfirmed: { type: Boolean, default: false },
   deliverySlot: { type: String, default: '' },
   status: { 
     type: String, 
@@ -54,7 +54,7 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Create Order (Enters as Payment Verification Pending - NOT confirmed yet)
+// Create Order (Enters as Pending Verification)
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -104,15 +104,16 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   }
 });
 
-// Update order status or delete when delivered / cancelled
+// Direct status update or permanent delete
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
 
+    // Purge cancelled, fake, or delivered orders directly from MongoDB
     if (status === 'Delivered' || status === 'Delete' || status === 'Cancelled') {
       const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
       if (!purgedOrder) return res.status(404).json({ error: 'Order not found' });
-      console.log(`🧹 Removed order #${purgedOrder.orderId} from database.`);
+      console.log(`🧹 Purged order #${purgedOrder.orderId} from database.`);
       return res.json({ success: true, delivered: true, purged: true, orderId: purgedOrder.orderId });
     }
 
