@@ -22,7 +22,7 @@ const MenuItemSchema = new mongoose.Schema({
   isVeg: { type: Boolean, default: true },
   description: { type: String, default: '' },
   image: { type: String, default: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop&q=80' },
-  auditStatus: { type: String, enum: ['pending_audit', 'approved', 'rejected'], default: 'pending_audit' },
+  auditStatus: { type: String, default: 'pending_audit' },
   adminFeedback: { type: String, default: 'Awaiting inspection' },
   createdAt: { type: Date, default: Date.now }
 });
@@ -38,10 +38,7 @@ const OrderSchema = new mongoose.Schema({
   totalAmount: Number,
   paymentConfirmed: { type: Boolean, default: false },
   deliverySlot: { type: String, default: '' },
-  status: { 
-    type: String, 
-    default: 'Payment Verification Pending' 
-  },
+  status: { type: String, default: 'Payment Verification Pending' },
   otp: Number,
   createdAt: { type: Date, default: Date.now }
 });
@@ -53,7 +50,15 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Create Order (Enters as Pending Verification)
+// Helper to query order by either custom orderId OR mongo _id
+const findOrder = (idParam) => {
+  if (mongoose.Types.ObjectId.isValid(idParam)) {
+    return { $or: [{ orderId: idParam }, { _id: idParam }] };
+  }
+  return { orderId: idParam };
+};
+
+// Create Order
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -84,8 +89,9 @@ app.post('/api/orders', async (req, res) => {
 app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
+    const query = findOrder(req.params.id);
     const updatedOrder = await Order.findOneAndUpdate(
-      { orderId: req.params.id },
+      query,
       { 
         $set: { 
           paymentConfirmed: true, 
@@ -103,19 +109,21 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   }
 });
 
-// Permanent Reject / Delete / Status update
+// Permanent Reject / Delete / Cancel / Delivered
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
+    const query = findOrder(req.params.id);
 
+    // Delete completely from MongoDB if Cancelled or Delivered
     if (status === 'Delivered' || status === 'Delete' || status === 'Cancelled') {
-      const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
-      console.log(`🗑️ Permanently removed order #${req.params.id} from MongoDB.`);
+      const purged = await Order.deleteMany(query);
+      console.log(`🗑️ Permanently removed order matching ${req.params.id} (Deleted count: ${purged.deletedCount})`);
       return res.json({ success: true, delivered: true, purged: true, orderId: req.params.id });
     }
 
     const updatedOrder = await Order.findOneAndUpdate(
-      { orderId: req.params.id },
+      query,
       { $set: { status } },
       { new: true }
     );
@@ -126,10 +134,26 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// Return all active orders (Always returns freshest data)
+// Direct DELETE endpoint fallback
+app.delete('/api/orders/:id', async (req, res) => {
+  try {
+    const query = findOrder(req.params.id);
+    const result = await Order.deleteMany(query);
+    console.log(`🗑️ DELETE endpoint purged order ${req.params.id} (Count: ${result.deletedCount})`);
+    res.json({ success: true, deletedCount: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Return active orders with no-cache header
 app.get('/api/orders', async (req, res) => {
   try {
-    res.set('Cache-Control', 'no-store');
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {

@@ -52,6 +52,15 @@ export default function App() {
     landmark: ''
   });
 
+  // Locally rejected blacklist to prevent stale polling from reviving cancelled cards
+  const [rejectedIds, setRejectedIds] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('lasar_rejected_ids') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
   // Tracked order for live view
   const [trackedOrderId, setTrackedOrderId] = useState(() => {
     return localStorage.getItem('lasar_last_order_id') || null;
@@ -59,7 +68,7 @@ export default function App() {
   const [activeCustomerOrder, setActiveCustomerOrder] = useState(null);
   const [apiConnected, setApiConnected] = useState(false);
 
-  // Mobile-friendly Time Slot Modal
+  // Time Slot Selection Modal
   const [slotModalOrder, setSlotModalOrder] = useState(null);
   const [customSlotInput, setCustomSlotInput] = useState('30-40 mins');
 
@@ -118,16 +127,17 @@ export default function App() {
   };
 
   const fetchOrders = async () => {
-    const res = await safeFetchJson(`${API_BASE}/api/orders?t=` + Date.now());
+    const res = await safeFetchJson(`${API_BASE}/api/orders?nocache=` + Date.now());
     if (res.ok && Array.isArray(res.data)) {
-      setOrders(res.data);
+      // Filter out any locally rejected IDs so polling NEVER resurrects them
+      const validOrders = res.data.filter(o => !rejectedIds.includes(o.orderId) && o.status !== 'Cancelled');
+      setOrders(validOrders);
 
       const targetId = trackedOrderId;
       const found = res.data.find(o => o.orderId === targetId);
       if (found) {
         setActiveCustomerOrder(found);
       } else if (targetId && !found) {
-        // Order was purged by admin
         setActiveCustomerOrder({
           orderId: targetId,
           status: 'Cancelled',
@@ -149,7 +159,7 @@ export default function App() {
       }, 3000);
       return () => clearInterval(interval);
     }
-  }, [user, isAdmin, trackedOrderId]);
+  }, [user, isAdmin, trackedOrderId, rejectedIds]);
 
   // Auth Handlers
   const handleRequestAuth = async (e) => {
@@ -231,13 +241,13 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN CONFIRMS & ACCEPTS ORDER WITH TIME SLOT
+  // ADMIN APPROVES ORDER AND SETS TIME
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
-    // 1. Lock screen immediately
+    // Update screen instantly
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
@@ -247,7 +257,6 @@ export default function App() {
 
     setSlotModalOrder(null);
 
-    // 2. Commit to MongoDB
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/verify-payment`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -257,10 +266,16 @@ export default function App() {
     fetchOrders();
   };
 
-  // ADMIN PERMANENT REJECT / CANCEL (Guaranteed Wipe)
+  // ADMIN PERMANENTLY REJECTS AND PURGES ORDER
   const handleRejectUnpaidOrder = async (orderId) => {
-    // 1. Instant local removal so it CANNOT revert
+    // 1. Instantly remove from screen
     setOrders(prev => prev.filter(o => o.orderId !== orderId));
+
+    // 2. Lock ID into rejected list so polling cannot put it back
+    const updated = [...rejectedIds, orderId];
+    setRejectedIds(updated);
+    localStorage.setItem('lasar_rejected_ids', JSON.stringify(updated));
+
     if (activeCustomerOrder?.orderId === orderId) {
       setActiveCustomerOrder({
         orderId,
@@ -269,7 +284,11 @@ export default function App() {
       });
     }
 
-    // 2. Instruct backend to permanently delete from MongoDB
+    // 3. Send DELETE to backend
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}`, {
+      method: 'DELETE'
+    });
+
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -279,7 +298,7 @@ export default function App() {
     fetchOrders();
   };
 
-  // STATUS STEPS (Food Ready, Out for Delivery, Delivered)
+  // ADVANCE FOOD STATUS OR DELIVER
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     if (newStatus === 'Delivered' || newStatus === 'Delete') {
       setOrders(prev => prev.filter(o => o.orderId !== orderId));
@@ -411,7 +430,7 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER -> PERSISTS TRACKER
+  // USER SUBMITS ORDER
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
