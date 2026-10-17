@@ -151,7 +151,7 @@ export default function App() {
     let identifier = '';
     if (loginMethod === 'mobile') {
       const cleaned = loginPhone.trim().replace(/\D/g, '');
-      if (cleaned.length !== 10) return alert('Please enter a 10-digit mobile number');
+      if (cleaned.length !== 10) return alert('Please enter a valid 10-digit mobile number');
       identifier = cleaned;
     } else {
       const cleaned = loginEmail.trim().toLowerCase();
@@ -225,7 +225,7 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN CONFIRMS ORDER & SETS TIME
+  // ADMIN APPROVES ORDER AND SETS TIME
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
@@ -261,13 +261,13 @@ export default function App() {
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: 'Payment was not received in Admin bank account' })
+      body: JSON.stringify({ reason: 'Payment was not credited to Admin bank account' })
     });
 
     fetchOrders();
   };
 
-  // UPDATE STATUS
+  // ADVANCE FOOD STATUS OR DELIVER
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: newStatus } : o));
 
@@ -280,7 +280,7 @@ export default function App() {
     fetchOrders();
   };
 
-  // DELETE SINGLE ORDER
+  // DISMISS SINGLE ORDER FROM ADMIN VIEW
   const handleDeleteOrderPermanently = async (orderId) => {
     setOrders(prev => prev.filter(o => o.orderId !== orderId));
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}`, {
@@ -289,12 +289,15 @@ export default function App() {
     fetchOrders();
   };
 
-  // BULK CLEAR ALL REJECTED ORDERS
+  // GUARANTEED ONE-TAP BULK CLEAR FOR ADMIN
   const handleClearAllRejected = async () => {
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
-    await safeFetchJson(`${API_BASE}/api/orders-clear-rejected`, {
-      method: 'DELETE'
+    
+    await safeFetchJson(`${API_BASE}/api/orders/clear-all-rejected`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
     });
+
     fetchOrders();
   };
 
@@ -462,7 +465,7 @@ export default function App() {
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
   // Split orders for Admin view
-  const pendingOrders = orders.filter(o => o.status === 'Pending Verification' || (!o.paymentConfirmed && o.status !== 'Rejected' && o.status !== 'Cancelled'));
+  const pendingOrders = orders.filter(o => o.status === 'Pending Verification');
   const approvedActiveOrders = orders.filter(o => o.paymentConfirmed && o.status !== 'Delivered' && o.status !== 'Rejected' && o.status !== 'Cancelled');
   const rejectedOrders = orders.filter(o => o.status === 'Rejected' || o.status === 'Cancelled');
 
@@ -688,9 +691,7 @@ export default function App() {
       {/* Main Content Area */}
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
-        {/* ======================================================== */}
-        {/* VIEW A: CUSTOMER ORDER HISTORY (SAVED PERMANENTLY) */}
-        {/* ======================================================== */}
+        {/* VIEW A: CUSTOMER ORDER HISTORY (PERSISTENT LOG) */}
         {!isAdmin && activeTab === 'history' && (
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -779,12 +780,10 @@ export default function App() {
           </div>
         )}
 
-        {/* ======================================================== */}
         {/* VIEW B: CUSTOMER MENU & LATEST ORDER LIVE TRACKER */}
-        {/* ======================================================== */}
         {activeTab === 'customer' && (
           <div>
-            {/* Live Latest Order Status Box (NOT CONFIRMED UNTIL ADMIN CONFIRMS) */}
+            {/* Live Latest Order Status Box (GATED STRICTLY BEHIND ADMIN CONFIRMATION) */}
             {latestUserOrder && latestUserOrder.status !== 'Delivered' && (
               <div style={{
                 backgroundColor: '#ffffff',
@@ -967,20 +966,18 @@ export default function App() {
           </div>
         )}
 
-        {/* ======================================================== */}
         {/* VIEW C: ADMIN "ORDERS RECEIVED" DASHBOARD */}
-        {/* ======================================================== */}
         {isAdmin && activeTab === 'adminOrders' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             
-            {/* 1. INCOMING UNVERIFIED ORDERS (NEEDS ADMIN APPROVAL) */}
+            {/* 1. INCOMING UNVERIFIED ORDERS */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #fc8019' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
                   <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>
                     Orders Awaiting Verification ({pendingOrders.length})
                   </h2>
-                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Check your HDFC/UPI app. Confirm only after funds reflect.</p>
+                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Check your UPI app. Confirm only after funds reflect.</p>
                 </div>
                 <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>
                   🔄 Refresh
@@ -1071,7 +1068,7 @@ export default function App() {
                         <button 
                           onClick={() => handleUpdateOrderStatus(order.orderId, 'Out for Delivery')}
                           style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Out for Delivery' ? '#282c3f' : '#f0f0f5', color: order.status === 'Out for Delivery' ? '#fff' : '#333', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                          🛵 Out for Delivery
+                              🛵 Out for Delivery
                         </button>
                         <button 
                           onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
@@ -1127,9 +1124,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ======================================================== */}
         {/* VIEW D: MASTER ADMIN AUDIT & DISH MANAGEMENT */}
-        {/* ======================================================== */}
         {isAdmin && activeTab === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Dish Upload Form */}

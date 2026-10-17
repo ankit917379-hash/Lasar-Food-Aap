@@ -40,6 +40,7 @@ const OrderSchema = new mongoose.Schema({
   deliverySlot: { type: String, default: '' },
   status: { type: String, default: 'Pending Verification' },
   cancellationReason: { type: String, default: '' },
+  dismissedByAdmin: { type: Boolean, default: false }, // Allows clearing from admin while preserving user history
   otp: Number,
   createdAt: { type: Date, default: Date.now }
 });
@@ -151,29 +152,32 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// 5. Delete Single Order
+// 5. Dismiss/Delete single order from Admin view
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = findOrder(req.params.id);
-    await Order.deleteMany(query);
+    await Order.updateMany(query, { $set: { dismissedByAdmin: true } });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 6. Bulk Delete ALL Rejected / Cancelled Orders
-app.delete('/api/orders-clear-rejected', async (req, res) => {
+// 6. CLEAR ALL REJECTED ORDERS FROM ADMIN VIEW
+app.post('/api/orders/clear-all-rejected', async (req, res) => {
   try {
-    const result = await Order.deleteMany({ status: { $in: ['Rejected', 'Cancelled'] } });
-    console.log(`🧹 Cleared all rejected orders (Count: ${result.deletedCount})`);
-    res.json({ success: true, deletedCount: result.deletedCount });
+    const result = await Order.updateMany(
+      { status: { $in: ['Rejected', 'Cancelled'] } },
+      { $set: { dismissedByAdmin: true } }
+    );
+    console.log(`🧹 Cleared rejected orders from Admin view (Updated: ${result.modifiedCount})`);
+    res.json({ success: true, modifiedCount: result.modifiedCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 7. Get Customer Orders by Phone
+// 7. Get Customer Orders by Phone (User keeps full history including rejected)
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
     res.set({ 'Cache-Control': 'no-store, no-cache' });
@@ -184,11 +188,11 @@ app.get('/api/orders/user/:phone', async (req, res) => {
   }
 });
 
-// 8. Get All Orders for Admin
+// 8. Get All Active Orders for Admin (Excludes dismissed orders)
 app.get('/api/orders', async (req, res) => {
   try {
     res.set({ 'Cache-Control': 'no-store, no-cache' });
-    const orders = await Order.find().sort({ createdAt: -1 });
+    const orders = await Order.find({ dismissedByAdmin: { $ne: true } }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
