@@ -32,7 +32,7 @@ export default function App() {
   const [isSendingOtp, setIsSendingOtp] = useState(false);
 
   // App tabs & data
-  const [activeTab, setActiveTab] = useState('customer'); // 'customer' | 'history' | 'partner' | 'admin'
+  const [activeTab, setActiveTab] = useState('customer'); // 'customer' | 'history' | 'adminOrders' | 'admin'
   const [menu, setMenu] = useState([]);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -113,7 +113,6 @@ export default function App() {
     if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
-  // Fetch all orders for Admin Kitchen & user-specific order history
   const fetchOrders = async () => {
     if (isAdmin) {
       const res = await safeFetchJson(`${API_BASE}/api/orders?nocache=` + Date.now());
@@ -122,7 +121,6 @@ export default function App() {
       }
     }
 
-    // Always fetch persistent history for the logged in user using phone number
     if (user && user.phone) {
       const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${user.phone}?nocache=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
@@ -196,6 +194,7 @@ export default function App() {
       localStorage.setItem('lasar_user', JSON.stringify(adminUser));
       setAuthStep(false);
       setEnteredCode('');
+      setActiveTab('adminOrders'); // Defaults directly to Orders Received for Admin
     } else {
       if (enteredCode.trim() !== generatedOtp) {
         return alert('Incorrect verification code. Please check on-screen OTP.');
@@ -211,6 +210,7 @@ export default function App() {
       localStorage.setItem('lasar_user', JSON.stringify(regularUser));
       setAuthStep(false);
       setEnteredCode('');
+      setActiveTab('customer');
     }
   };
 
@@ -231,7 +231,7 @@ export default function App() {
     const orderId = slotModalOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
-    // Update screen instantly
+    // Instantly update on screen
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
@@ -250,12 +250,13 @@ export default function App() {
     fetchOrders();
   };
 
-  // ADMIN REJECTS UNPAID ORDER (SAVED PERMANENTLY AS REJECTED)
+  // ADMIN REJECTS UNPAID ORDER
   const handleRejectUnpaidOrder = async (orderId) => {
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       status: 'Cancelled',
-      cancellationReason: 'Payment not received in bank account'
+      paymentConfirmed: false,
+      cancellationReason: 'Payment was not credited to Admin bank account'
     } : o));
 
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject-order`, {
@@ -277,6 +278,15 @@ export default function App() {
       body: JSON.stringify({ status: newStatus })
     });
 
+    fetchOrders();
+  };
+
+  // PERMANENTLY REMOVE FROM ADMIN LIST
+  const handleDeleteOrderPermanently = async (orderId) => {
+    setOrders(prev => prev.filter(o => o.orderId !== orderId));
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}`, {
+      method: 'DELETE'
+    });
     fetchOrders();
   };
 
@@ -441,11 +451,11 @@ export default function App() {
     return matchesSearch && matchesVeg && matchesCat;
   });
 
-  // Recent orders for user tracker (Most recent first)
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
-  // Filter kitchen active incoming orders (excluding completed or rejected)
-  const activeKitchenOrders = orders.filter(o => o.status !== 'Delivered');
+  // Active incoming orders awaiting action or cooking
+  const incomingOrders = orders.filter(o => o.status === 'Payment Verification Pending');
+  const processedOrders = orders.filter(o => o.status !== 'Payment Verification Pending');
 
   // ==========================================
   // VIEW 1: GATEKEEPER LOGIN ONLY
@@ -638,20 +648,21 @@ export default function App() {
               🍽️ Menu
             </button>
 
-            {/* Persistent Order History Button for Users */}
-            <button onClick={() => { setActiveTab('history'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'history' ? '#fc8019' : '#f0f0f5', color: activeTab === 'history' ? '#fff' : '#3d4152' }}>
-              📜 My Orders ({userHistory.length})
-            </button>
+            {/* If Customer -> "My Orders", If Admin -> "Orders Received" */}
+            {!isAdmin ? (
+              <button onClick={() => { setActiveTab('history'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'history' ? '#fc8019' : '#f0f0f5', color: activeTab === 'history' ? '#fff' : '#3d4152' }}>
+                📜 My Orders ({userHistory.length})
+              </button>
+            ) : (
+              <button onClick={() => { setActiveTab('adminOrders'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'adminOrders' ? '#282c3f' : '#f0f0f5', color: activeTab === 'adminOrders' ? '#fff' : '#3d4152' }}>
+                📦 Orders Received ({orders.length})
+              </button>
+            )}
 
             {isAdmin && (
-              <>
-                <button onClick={() => { setActiveTab('partner'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'partner' ? '#282c3f' : '#f0f0f5', color: activeTab === 'partner' ? '#fff' : '#3d4152' }}>
-                  👨‍🍳 Kitchen ({activeKitchenOrders.length})
-                </button>
-                <button onClick={() => { setActiveTab('admin'); fetchAuditData(); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'admin' ? '#282c3f' : '#f0f0f5', color: activeTab === 'admin' ? '#fff' : '#3d4152' }}>
-                  🛡️ Admin
-                </button>
-              </>
+              <button onClick={() => { setActiveTab('admin'); fetchAuditData(); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'admin' ? '#282c3f' : '#f0f0f5', color: activeTab === 'admin' ? '#fff' : '#3d4152' }}>
+                🛡️ Admin
+              </button>
             )}
 
             <button onClick={handleLogout} style={{ padding: '6px 10px', borderRadius: 16, border: '1px solid #ffd8cc', backgroundColor: '#fff2ed', color: '#fc8019', cursor: 'pointer', fontWeight: 800, fontSize: 11 }}>
@@ -669,14 +680,14 @@ export default function App() {
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
         {/* ======================================================== */}
-        {/* VIEW A: PERSISTENT ORDER HISTORY (SAVED BY MOBILE NUMBER) */}
+        {/* VIEW A: CUSTOMER ORDER HISTORY */}
         {/* ======================================================== */}
-        {activeTab === 'history' && (
+        {!isAdmin && activeTab === 'history' && (
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Your Orders History</h2>
-                <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#7e808c' }}>Saved for phone number: <strong>{user.phone}</strong></p>
+                <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#7e808c' }}>Saved for phone: <strong>{user.phone}</strong></p>
               </div>
               <button onClick={fetchOrders} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #ccc', backgroundColor: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
                 🔄 Refresh
@@ -687,7 +698,7 @@ export default function App() {
               <div style={{ textAlign: 'center', padding: '40px 0', color: '#7e808c' }}>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>📜</div>
                 <div style={{ fontSize: 15, fontWeight: 800, color: '#282c3f' }}>No Orders Found Yet</div>
-                <p style={{ fontSize: 12, marginTop: 4 }}>Place an order from the menu and its status will be saved here forever.</p>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Place an order from the menu and its live status will be stored here.</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -764,7 +775,7 @@ export default function App() {
         {/* ======================================================== */}
         {activeTab === 'customer' && (
           <div>
-            {/* Live Latest Order Status Box */}
+            {/* Live Latest Order Status Box for Customer */}
             {latestUserOrder && latestUserOrder.status !== 'Delivered' && (
               <div style={{
                 backgroundColor: '#ffffff',
@@ -948,81 +959,117 @@ export default function App() {
         )}
 
         {/* ======================================================== */}
-        {/* VIEW C: ADMIN KITCHEN DISPATCH */}
+        {/* VIEW C: ADMIN "ORDERS RECEIVED" SECTION (NEW CLEAN UI) */}
         {/* ======================================================== */}
-        {isAdmin && activeTab === 'partner' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {isAdmin && activeTab === 'adminOrders' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            
+            {/* 1. Pending Verification Section */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #fc8019' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
-                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({activeKitchenOrders.length})</h2>
-                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Cross-check bank credit. Confirm if received or Reject if unpaid.</p>
+                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>
+                    Incoming Orders ({incomingOrders.length})
+                  </h2>
+                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Verify bank credit in UPI app. Approve or Reject.</p>
                 </div>
-                <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
+                <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>
+                  🔄 Refresh
+                </button>
               </div>
 
-              {activeKitchenOrders.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '24px 0', color: '#7e808c', fontSize: 13 }}>
-                  🎉 No pending orders right now.
+              {incomingOrders.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '20px 0', color: '#7e808c', fontSize: 13 }}>
+                  🎉 No pending orders awaiting approval!
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {activeKitchenOrders.map(order => (
-                    <div key={order.orderId} style={{ border: `1.5px solid ${order.status === 'Cancelled' ? '#fecaca' : order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 8, marginBottom: 8 }}>
+                  {incomingOrders.map(order => (
+                    <div key={order.orderId} style={{ border: '1.5px solid #fed7aa', borderRadius: 10, padding: 14, backgroundColor: '#fffaf5' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #ffedd5', paddingBottom: 8, marginBottom: 8 }}>
+                        <div>
+                          <span style={{ fontSize: 14, fontWeight: 900, color: '#282c3f' }}>#{order.orderId}</span>
+                          <span style={{ marginLeft: 8, fontSize: 10, backgroundColor: '#fffbeb', color: '#b45309', padding: '3px 8px', borderRadius: 6, fontWeight: 900 }}>
+                            ⚠️ AWAITING BANK CREDIT
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
+                      </div>
+
+                      <div style={{ backgroundColor: '#ffffff', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12, lineHeight: 1.5, border: '1px solid #ffedd5' }}>
+                        <div>👤 <strong>Customer:</strong> {order.customerName} (📞 <a href={`tel:${order.phone}`} style={{ color: '#fc8019', fontWeight: 800 }}>{order.phone}</a>)</div>
+                        <div>📍 <strong>Area:</strong> <span style={{ color: '#fc8019', fontWeight: 800 }}>{order.deliveryArea}</span></div>
+                        <div>🏠 <strong>Address:</strong> {order.address}</div>
+                        <div>🚩 <strong>Landmark:</strong> {order.landmark || 'N/A'}</div>
+                        <div style={{ marginTop: 2, color: '#0f8a65', fontWeight: 800 }}>🔐 Passcode: {order.otp}</div>
+                      </div>
+
+                      <div style={{ fontSize: 11, color: '#686b78', marginBottom: 12 }}>
+                        <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                      </div>
+
+                      {/* Approval and Rejection Buttons with Direct Guaranteed Triggers */}
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => { setSlotModalOrder(order); setCustomSlotInput('30-40 mins'); }}
+                          style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 12, fontWeight: 900, cursor: 'pointer', boxShadow: '0 2px 6px rgba(15,138,101,0.2)' }}>
+                          ✓ Confirm Bank Credit & Accept Order
+                        </button>
+                        <button 
+                          onClick={() => handleRejectUnpaidOrder(order.orderId)}
+                          style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1.5px solid #ef4444', backgroundColor: '#ffffff', color: '#dc2626', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
+                          ✕ Reject (Unpaid / Fake)
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Processed / Cooking / Dispatched Section */}
+            <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
+              <h2 style={{ margin: '0 0 12px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>
+                Active Kitchen & Cancelled Orders ({processedOrders.length})
+              </h2>
+
+              {processedOrders.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '16px 0', color: '#7e808c', fontSize: 12 }}>No active kitchen orders.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {processedOrders.map(order => (
+                    <div key={order.orderId} style={{ border: `1.5px solid ${order.status === 'Cancelled' ? '#fecaca' : '#bbf7d0'}`, borderRadius: 10, padding: 12, backgroundColor: order.status === 'Cancelled' ? '#fef2f2' : '#ffffff' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 6, marginBottom: 6 }}>
                         <div>
                           <span style={{ fontSize: 13, fontWeight: 900, color: '#282c3f' }}>#{order.orderId}</span>
                           <span style={{
                             marginLeft: 8,
                             fontSize: 10,
-                            backgroundColor: order.status === 'Cancelled' ? '#fef2f2' : order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
-                            color: order.status === 'Cancelled' ? '#e43b4f' : order.paymentConfirmed ? '#0f8a65' : '#b45309',
-                            padding: '3px 8px',
-                            borderRadius: 6,
+                            backgroundColor: order.status === 'Cancelled' ? '#fee2e2' : '#eaf8f2',
+                            color: order.status === 'Cancelled' ? '#dc2626' : '#0f8a65',
+                            padding: '2px 6px',
+                            borderRadius: 4,
                             fontWeight: 900
                           }}>
-                            {order.status === 'Cancelled' ? '❌ REJECTED' : order.paymentConfirmed ? `✓ ${order.status.toUpperCase()}` : '⚠️ AWAITING BANK CREDIT'}
+                            {order.status === 'Cancelled' ? '❌ REJECTED' : `✓ ${order.status.toUpperCase()}`}
                           </span>
                         </div>
-                        <div style={{ fontSize: 15, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
+                        <div style={{ fontSize: 14, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
                       </div>
 
-                      <div style={{ backgroundColor: '#f8fafc', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12, lineHeight: 1.5 }}>
-                        <div>👤 <strong>Customer:</strong> {order.customerName} (📞 <a href={`tel:${order.phone}`} style={{ color: '#fc8019', fontWeight: 800 }}>{order.phone}</a>)</div>
-                        <div>📍 <strong>Delivery Area:</strong> <span style={{ color: '#fc8019', fontWeight: 800 }}>{order.deliveryArea || 'Not specified'}</span></div>
-                        <div>🏠 <strong>Complete Address:</strong> {order.address}</div>
-                        <div>🚩 <strong>Nearest Landmark:</strong> {order.landmark || 'N/A'}</div>
-                        {order.deliverySlot && (
-                          <div style={{ marginTop: 4, color: '#0f8a65', fontWeight: 800 }}>
-                            🕒 <strong>Delivery Time Slot:</strong> {order.deliverySlot}
-                          </div>
-                        )}
-                        <div style={{ marginTop: 2, color: '#0f8a65', fontWeight: 800 }}>🔐 Passcode: {order.otp}</div>
+                      <div style={{ fontSize: 12, color: '#475569', marginBottom: 8 }}>
+                        <div>👤 {order.customerName} (📞 {order.phone}) • 📍 {order.deliveryArea}</div>
+                        {order.deliverySlot && <div style={{ color: '#0f8a65', fontWeight: 800 }}>🕒 Delivery Slot: {order.deliverySlot}</div>}
+                        {order.cancellationReason && <div style={{ color: '#dc2626', fontWeight: 800 }}>⚠️ {order.cancellationReason}</div>}
                       </div>
 
-                      <div style={{ fontSize: 11, color: '#686b78', marginBottom: 10 }}>
-                        <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
-                      </div>
-
-                      {/* State-specific button rendering */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {order.status === 'Cancelled' ? (
-                          <div style={{ fontSize: 11, color: '#dc2626', fontWeight: 800 }}>
-                            ❌ This order was rejected and the user has been notified.
-                          </div>
-                        ) : !order.paymentConfirmed ? (
-                          <>
-                            <button
-                              onClick={() => { setSlotModalOrder(order); setCustomSlotInput('30-40 mins'); }}
-                              style={{ padding: '8px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
-                              ✓ Confirm Bank Credit & Accept Order
-                            </button>
-                            <button 
-                              onClick={() => handleRejectUnpaidOrder(order.orderId)}
-                              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fff', color: '#dc2626', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
-                              ✕ Reject (Unpaid / Fake)
-                            </button>
-                          </>
+                          <button
+                            onClick={() => handleDeleteOrderPermanently(order.orderId)}
+                            style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fff', color: '#dc2626', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                            🗑️ Delete from List
+                          </button>
                         ) : (
                           <>
                             <button 
@@ -1049,6 +1096,14 @@ export default function App() {
               )}
             </div>
 
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* VIEW D: MASTER ADMIN AUDIT & DISH MANAGEMENT */}
+        {/* ======================================================== */}
+        {isAdmin && activeTab === 'admin' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Dish Upload Form */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
               <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Dish Upload</h2>
@@ -1106,12 +1161,8 @@ export default function App() {
                 </button>
               </form>
             </div>
-          </div>
-        )}
 
-        {/* 3. MASTER ADMIN CONTROLS */}
-        {isAdmin && activeTab === 'admin' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Quality Audit */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #282c3f' }}>
               <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Taste & Quality Audit ({auditQueue.pendingDishes.length})</h2>
               <p style={{ margin: '0 0 14px 0', fontSize: 12, color: '#7e808c' }}>Approve dishes before they go live on customer menu.</p>
@@ -1144,6 +1195,7 @@ export default function App() {
               )}
             </div>
 
+            {/* Live Dishes */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
               <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Live Certified Dishes ({auditQueue.approvedDishes.length})</h2>
               <p style={{ margin: '0 0 14px 0', fontSize: 12, color: '#7e808c' }}>Edit dish prices or remove items completely.</p>
@@ -1194,67 +1246,83 @@ export default function App() {
         </div>
       )}
 
-      {/* Checkout Modal */}
+      {/* ======================================================== */}
+      {/* REDESIGNED ADDRESS & PAYMENT MODAL (NEW VIBRANT UI) */}
+      {/* ======================================================== */}
       {orderModalOpen && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 14 }}>
-          <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 440, padding: 20, maxHeight: '92vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 14 }}>
+          <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 440, padding: 22, maxHeight: '92vh', overflowY: 'auto', border: '2px solid #fed7aa', boxShadow: '0 20px 40px rgba(252,128,25,0.18)' }}>
+            
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1.5px solid #fff2eb', paddingBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 20 }}>🍲</span>
-                <h3 style={{ margin: 0, fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Delivery & Payment</h3>
+                <span style={{ fontSize: 24 }}>📍</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 17, color: '#1e293b', fontWeight: 900 }}>Delivery Details</h3>
+                  <span style={{ fontSize: 11, color: '#fc8019', fontWeight: 700 }}>Enter your exact location below</span>
+                </div>
               </div>
-              <button onClick={() => setOrderModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#7e808c' }}>✕</button>
+              <button onClick={() => setOrderModalOpen(false)} style={{ border: 'none', background: '#f1f5f9', borderRadius: '50%', width: 30, height: 30, fontSize: 16, cursor: 'pointer', color: '#64748b' }}>✕</button>
             </div>
 
             <form onSubmit={handleInitiatePayment}>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Full Name</label>
-                <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>10-Digit Mobile Number</label>
-                <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="Enter 10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#fc8019', marginBottom: 3 }}>Delivery Area / Locality / Sector *</label>
-                <input required type="text" placeholder="e.g. Sector 62 / Raj Nagar / Shastri Nagar" value={customerForm.deliveryArea} onChange={e => setCustomerForm({ ...customerForm, deliveryArea: e.target.value })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1.5px solid #fc8019', boxSizing: 'border-box', backgroundColor: '#fffaf6' }} />
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Complete House / Flat Address</label>
-                <textarea required rows={2} placeholder="House number, floor, building name..." value={customerForm.address} onChange={e => setCustomerForm({ ...customerForm, address: e.target.value })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Nearest Landmark / Famous Place *</label>
-                <input required type="text" placeholder="e.g. Near City Hospital / Opp. Central Bank" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
-              </div>
-
-              <div style={{ backgroundColor: '#fff9f5', border: '1.5px solid #fed7aa', borderRadius: 10, padding: 14, marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, fontWeight: 900, color: '#c2410c' }}>AMOUNT TO TRANSFER</span>
-                  <span style={{ fontSize: 18, fontWeight: 900, color: '#fc8019' }}>₹{cartTotal}</span>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                <div style={{ flex: 1.2 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#334155', marginBottom: 4 }}>Full Name</label>
+                  <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
                 </div>
-                
-                <p style={{ margin: '6px 0 0 0', fontSize: 11, color: '#666', lineHeight: 1.4 }}>
-                  Tapping below opens your UPI app to transfer <strong>₹{cartTotal}</strong> to Admin ({ADMIN_PHONE}). Your order will be placed into kitchen verification.
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#334155', marginBottom: 4 }}>Mobile Number</label>
+                  <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+                </div>
+              </div>
+
+              {/* Enhanced Delivery Area Input */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#ea580c', marginBottom: 4 }}>
+                  🏙️ Delivery Area / Locality / Sector *
+                </label>
+                <input required type="text" placeholder="e.g. Sector 62 / Raj Nagar / Shastri Nagar" value={customerForm.deliveryArea} onChange={e => setCustomerForm({ ...customerForm, deliveryArea: e.target.value })} style={{ width: '100%', padding: '11px 12px', borderRadius: 10, border: '2px solid #fdba74', backgroundColor: '#fff7ed', boxSizing: 'border-box', fontSize: 13, color: '#9a3412', fontWeight: 800, outline: 'none' }} />
+              </div>
+
+              {/* Enhanced Complete House Address */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#1e293b', marginBottom: 4 }}>
+                  🏠 Complete House / Flat / Street Address *
+                </label>
+                <textarea required rows={2} placeholder="Flat no., building name, street..." value={customerForm.address} onChange={e => setCustomerForm({ ...customerForm, address: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #cbd5e1', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+              </div>
+
+              {/* Nearest Landmark */}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#1e293b', marginBottom: 4 }}>
+                  🚩 Nearest Landmark / Famous Shop *
+                </label>
+                <input required type="text" placeholder="e.g. Near City Hospital / Opp. Bank" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #cbd5e1', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+              </div>
+
+              {/* Total Payable Box */}
+              <div style={{ backgroundColor: '#fff7ed', border: '1.5px solid #fdba74', borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 900, color: '#c2410c' }}>ORDER TOTAL</span>
+                  <span style={{ fontSize: 19, fontWeight: 900, color: '#ea580c' }}>₹{cartTotal}</span>
+                </div>
+                <p style={{ margin: '6px 0 0 0', fontSize: 11, color: '#7c2d12', lineHeight: 1.4 }}>
+                  Tapping below opens your UPI app to transfer <strong>₹{cartTotal}</strong> to Admin ({ADMIN_PHONE}). Your order will be sent to the kitchen.
                 </p>
               </div>
 
               <button
                 type="submit"
                 disabled={isSubmittingOrder}
-                style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 8, fontWeight: 900, fontSize: 15, cursor: isSubmittingOrder ? 'wait' : 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                {isSubmittingOrder ? 'Opening UPI App...' : `⚡ Open UPI App & Pay ₹${cartTotal}`}
+                style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 10, fontWeight: 900, fontSize: 15, cursor: isSubmittingOrder ? 'wait' : 'pointer', boxShadow: '0 4px 14px rgba(15,138,101,0.3)' }}>
+                {isSubmittingOrder ? 'Opening UPI...' : `⚡ Open UPI App & Pay ₹${cartTotal}`}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MOBILE-NATIVE TIME SLOT MODAL */}
+      {/* MOBILE TIME SLOT MODAL FOR ADMIN */}
       {slotModalOrder && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, padding: 16 }}>
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 380, padding: 20, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>
@@ -1265,7 +1333,6 @@ export default function App() {
               Confirm credit for Order #{slotModalOrder.orderId} and select expected delivery window:
             </p>
 
-            {/* Quick Touch Presets */}
             <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
               {['25-35 mins', '35-45 mins', '45-60 mins'].map(slot => (
                 <button

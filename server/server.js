@@ -10,7 +10,7 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 const MONGO_URI = 'mongodb+srv://ankit917379_db_user:LasarFood2026@lasar-cluster.hlz0irb.mongodb.net/lasarDB?retryWrites=true&w=majority&appName=lasar-cluster';
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('🍃 Connected to MongoDB Atlas Cloud Database successfully!'))
+  .then(() => console.log('🍃 MongoDB Atlas Connected!'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
 const MenuItemSchema = new mongoose.Schema({
@@ -38,11 +38,7 @@ const OrderSchema = new mongoose.Schema({
   totalAmount: Number,
   paymentConfirmed: { type: Boolean, default: false },
   deliverySlot: { type: String, default: '' },
-  status: { 
-    type: String, 
-    enum: ['Payment Verification Pending', 'Order Placed', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered', 'Cancelled'],
-    default: 'Payment Verification Pending' 
-  },
+  status: { type: String, default: 'Payment Verification Pending' },
   cancellationReason: { type: String, default: '' },
   otp: Number,
   createdAt: { type: Date, default: Date.now }
@@ -55,7 +51,7 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Helper for finding order by orderId or _id
+// Helper for finding order
 const findOrder = (idParam) => {
   if (mongoose.Types.ObjectId.isValid(idParam)) {
     return { $or: [{ orderId: idParam }, { _id: idParam }] };
@@ -83,14 +79,14 @@ app.post('/api/orders', async (req, res) => {
       otp: Math.floor(1000 + Math.random() * 9000)
     });
     await order.save();
-    console.log(`⏳ Awaiting Bank Verification: #${order.orderId} for phone ${phone}`);
+    console.log(`⏳ Awaiting Bank Verification: #${order.orderId} from ${phone}`);
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2. Admin confirms bank credit & sets delivery time
+// 2. Admin Approves Order with Delivery Time Slot
 app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
@@ -114,7 +110,7 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   }
 });
 
-// 3. Admin rejects fake/unpaid order -> SAVED AS CANCELLED (NEVER DELETED, SO USER CAN SEE IT)
+// 3. Admin Rejects Fake / Unpaid Order
 app.patch('/api/orders/:id/reject-order', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -125,20 +121,20 @@ app.patch('/api/orders/:id/reject-order', async (req, res) => {
         $set: { 
           paymentConfirmed: false, 
           status: 'Cancelled',
-          cancellationReason: reason || 'Payment was not received in Admin bank account'
+          cancellationReason: reason || 'Payment was not credited to bank account'
         } 
       },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`❌ Cancelled Order #${updatedOrder.orderId} for phone ${updatedOrder.phone}`);
+    console.log(`❌ Cancelled Order #${updatedOrder.orderId}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 4. Update status (Preparing, Out for Delivery, Delivered)
+// 4. Update Status (Preparing, Out for Delivery, Delivered)
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -155,7 +151,18 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// 5. Get customer order history by phone number
+// 5. Permanent Delete
+app.delete('/api/orders/:id', async (req, res) => {
+  try {
+    const query = findOrder(req.params.id);
+    await Order.deleteMany(query);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Get orders for customer history by phone
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
     res.set({ 'Cache-Control': 'no-store, no-cache' });
@@ -166,7 +173,7 @@ app.get('/api/orders/user/:phone', async (req, res) => {
   }
 });
 
-// 6. Get all orders for Admin Kitchen
+// 7. Get orders for Admin Orders Received / Kitchen
 app.get('/api/orders', async (req, res) => {
   try {
     res.set({ 'Cache-Control': 'no-store, no-cache' });
