@@ -54,7 +54,7 @@ export default function App() {
   const [activeCustomerOrder, setActiveCustomerOrder] = useState(null);
   const [apiConnected, setApiConnected] = useState(false);
 
-  // Inline Admin Accept Slot Modal (Replaces broken window.prompt)
+  // Mobile-friendly Time Slot Modal
   const [slotModalOrder, setSlotModalOrder] = useState(null);
   const [customSlotInput, setCustomSlotInput] = useState('30-40 mins');
 
@@ -219,13 +219,13 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // DIRECT VERIFY & ACCEPT SUBMISSION
+  // ADMIN ACCEPTS AND SETS TIME
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
-    // 1. Optimistic Local State Update
+    // Update screen immediately
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
@@ -235,37 +235,35 @@ export default function App() {
 
     setSlotModalOrder(null);
 
-    // 2. Persist to MongoDB API
-    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/verify-payment`, {
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/verify-payment`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deliverySlot: finalSlot })
     });
 
-    if (!res.ok) {
-      alert('Network issue syncing with database. Refreshing...');
-      fetchOrders();
-    }
+    fetchOrders();
   };
 
-  // DIRECT REJECT & DELETE (Zero Prompt, Instant UI Wipe)
+  // ADMIN REJECTS & PURGES INSTANTLY
   const handleRejectUnpaidOrder = async (orderId) => {
-    // 1. Wipe from screen immediately
+    // Remove immediately from view
     setOrders(prev => prev.filter(o => o.orderId !== orderId));
     if (activeCustomerOrder?.orderId === orderId) {
       setActiveCustomerOrder(null);
     }
 
-    // 2. Delete permanently from MongoDB Atlas
+    // Tell server to delete
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'Cancelled' })
     });
+
+    fetchOrders();
   };
 
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
-    if (newStatus === 'Delivered' || newStatus === 'Delete') {
+    if (newStatus === 'Delivered' || newStatus === 'Delete' || newStatus === 'Cancelled') {
       setOrders(prev => prev.filter(o => o.orderId !== orderId));
       if (activeCustomerOrder?.orderId === orderId) {
         setActiveCustomerOrder(null);
@@ -274,15 +272,13 @@ export default function App() {
       setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: newStatus } : o));
     }
 
-    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus })
     });
 
-    if (!res.ok) {
-      fetchOrders();
-    }
+    fetchOrders();
   };
 
   const handleAuditDecision = async (dishId, decision) => {
@@ -396,7 +392,7 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER PLACES ORDER -> OPENS UPI APP
+  // USER SUBMITS ORDER & LAUNCHES UPI
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -446,6 +442,9 @@ export default function App() {
     const matchesCat = selectedCategory === 'All' ? true : dish.category === selectedCategory;
     return matchesSearch && matchesVeg && matchesCat;
   });
+
+  // Only show active (non-cancelled) orders in kitchen list
+  const activeKitchenOrders = orders.filter(o => o.status !== 'Cancelled');
 
   // ==========================================
   // VIEW 1: GATEKEEPER LOGIN ONLY
@@ -640,7 +639,7 @@ export default function App() {
                   🍽️ Menu
                 </button>
                 <button onClick={() => { setActiveTab('partner'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'partner' ? '#fc8019' : '#f0f0f5', color: activeTab === 'partner' ? '#fff' : '#3d4152' }}>
-                  👨‍🍳 Kitchen ({orders.length})
+                  👨‍🍳 Kitchen ({activeKitchenOrders.length})
                 </button>
                 <button onClick={() => { setActiveTab('admin'); fetchAuditData(); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'admin' ? '#282c3f' : '#f0f0f5', color: activeTab === 'admin' ? '#fff' : '#3d4152' }}>
                   🛡️ Admin
@@ -874,19 +873,19 @@ export default function App() {
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #fc8019' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
-                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({orders.length})</h2>
+                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({activeKitchenOrders.length})</h2>
                   <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Cross-check bank credit. Confirm if received or Reject & Delete if unpaid.</p>
                 </div>
                 <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
               </div>
 
-              {orders.length === 0 ? (
+              {activeKitchenOrders.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '24px 0', color: '#7e808c', fontSize: 13 }}>
-                  🎉 No active orders right now.
+                  🎉 No pending or active orders right now.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {orders.map(order => (
+                  {activeKitchenOrders.map(order => (
                     <div key={order.orderId} style={{ border: `1.5px solid ${order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 8, marginBottom: 8 }}>
                         <div>
@@ -894,13 +893,13 @@ export default function App() {
                           <span style={{
                             marginLeft: 8,
                             fontSize: 10,
-                            backgroundColor: order.status === 'Cancelled' ? '#fef2f2' : order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
-                            color: order.status === 'Cancelled' ? '#e43b4f' : order.paymentConfirmed ? '#0f8a65' : '#b45309',
+                            backgroundColor: order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
+                            color: order.paymentConfirmed ? '#0f8a65' : '#b45309',
                             padding: '3px 8px',
                             borderRadius: 6,
                             fontWeight: 900
                           }}>
-                            {order.status === 'Cancelled' ? '❌ CANCELLED' : order.paymentConfirmed ? '✓ BANK VERIFIED' : '⚠️ AWAITING BANK CREDIT'}
+                            {order.paymentConfirmed ? '✓ BANK VERIFIED' : '⚠️ AWAITING BANK CREDIT'}
                           </span>
                         </div>
                         <div style={{ fontSize: 15, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
@@ -923,7 +922,7 @@ export default function App() {
                         <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                       </div>
 
-                      {/* Direct Buttons without Popup Prompt Failures */}
+                      {/* State-specific button rendering */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {!order.paymentConfirmed ? (
                           <>
@@ -1169,7 +1168,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MOBILE-NATIVE TIME SLOT MODAL (Completely Replaces window.prompt) */}
+      {/* MOBILE-NATIVE TIME SLOT MODAL */}
       {slotModalOrder && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, padding: 16 }}>
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 380, padding: 20, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>

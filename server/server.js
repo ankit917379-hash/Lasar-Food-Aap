@@ -104,12 +104,11 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   }
 });
 
-// Direct status update or permanent delete
+// Direct status update or permanent purge
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
 
-    // Purge cancelled, fake, or delivered orders directly from MongoDB
     if (status === 'Delivered' || status === 'Delete' || status === 'Cancelled') {
       const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
       if (!purgedOrder) return res.status(404).json({ error: 'Order not found' });
@@ -129,9 +128,10 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
+// Returns active orders
 app.get('/api/orders', async (req, res) => {
   try {
-    const orders = await Order.find().sort({ createdAt: -1 });
+    const orders = await Order.find({ status: { $ne: 'Cancelled' } }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
