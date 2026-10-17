@@ -262,7 +262,7 @@ export default function App() {
       body: JSON.stringify({
         dishId,
         decision,
-        feedback: decision === 'approved' ? 'Approved by Master Admin' : 'Quality rejected'
+        feedback: decision === 'approved' ? 'Approved by Master Admin' : 'Rejected'
       })
     });
     if (res.ok) {
@@ -423,7 +423,6 @@ export default function App() {
       <div style={{ minHeight: '100vh', backgroundColor: '#f2f2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, fontFamily: 'Basis Grotesque Pro, system-ui, -apple-system, sans-serif' }}>
         <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 410, padding: 30, boxShadow: '0 10px 30px rgba(0,0,0,0.08)' }}>
           
-          {/* Attractive Cloche / Platter Culinary Logo */}
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
             <div style={{
               display: 'inline-flex',
@@ -668,7 +667,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Prominent Delivery Time Slot Window */}
                 {activeCustomerOrder.deliverySlot ? (
                   <div style={{
                     marginTop: 14,
@@ -705,7 +703,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Progress bar */}
                 <div style={{ margin: '16px 0 8px 0', backgroundColor: '#f0f0f5', borderRadius: 8, height: 8, overflow: 'hidden' }}>
                   <div style={{ 
                     height: '100%', 
@@ -726,29 +723,6 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            {/* Restaurant Cover Banner (Swiggy Style) */}
-            <div style={{
-              background: 'linear-gradient(135deg, #1e222b 0%, #282c3f 100%)',
-              color: '#ffffff',
-              borderRadius: 20,
-              padding: '24px',
-              marginBottom: 20,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h1 style={{ margin: '0 0 6px 0', fontSize: 24, fontWeight: 900 }}>LASAR Home Food</h1>
-                  <p style={{ margin: '0 0 12px 0', fontSize: 13, color: '#d4d5d9' }}>North Indian • Homestyle Thalis • Healthy & Fresh</p>
-                  <div style={{ display: 'flex', gap: 14, fontSize: 12, fontWeight: 800 }}>
-                    <span style={{ backgroundColor: '#0f8a65', color: '#fff', padding: '3px 8px', borderRadius: 6 }}>★ 4.8</span>
-                    <span>🕒 30-40 MINS</span>
-                    <span>💰 ₹100 for two</span>
-                  </div>
-                </div>
-                <div style={{ fontSize: 52 }}>🍲</div>
-              </div>
-            </div>
 
             {/* Search and Veg Toggle Filter */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
@@ -818,7 +792,6 @@ export default function App() {
                           <p style={{ margin: 0, fontSize: 13, color: '#7e808c', lineHeight: 1.4 }}>{dish.description}</p>
                         </div>
 
-                        {/* Image + Swiggy Style ADD Counter Button */}
                         <div style={{ position: 'relative', width: 120, height: 105, flexShrink: 0 }}>
                           <img src={dish.image} alt={dish.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 14 }} />
                           <div style={{ position: 'absolute', bottom: -12, left: '50%', transform: 'translateX(-50%)', width: '90%' }}>
@@ -882,7 +855,6 @@ export default function App() {
                         <div style={{ fontSize: 16, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
                       </div>
 
-                      {/* Customer Delivery Details */}
                       <div style={{ backgroundColor: '#f8fafc', borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
                         <div>👤 <strong>Customer:</strong> {order.customerName} (📞 <a href={`tel:${order.phone}`} style={{ color: '#fc8019', fontWeight: 800 }}>{order.phone}</a>)</div>
                         <div>📍 <strong>Delivery Area:</strong> <span style={{ color: '#fc8019', fontWeight: 800 }}>{order.deliveryArea || 'Not specified'}</span></div>
@@ -903,7 +875,6 @@ export default function App() {
                         <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                       </div>
 
-                      {/* Admin Workflow Buttons */}
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         {!order.paymentConfirmed ? (
                           <button
@@ -1071,7 +1042,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating Bottom Cart (Swiggy Style) */}
+      {/* Floating Bottom Cart */}
       {cart.length > 0 && activeTab === 'customer' && (
         <div style={{ position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', width: '92%', maxWidth: 640, backgroundColor: '#fc8019', color: '#ffffff', borderRadius: 14, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 8px 24px rgba(252, 128, 25, 0.4)', zIndex: 1000 }}>
           <div>
@@ -1107,7 +1078,6 @@ export default function App() {
                 <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="Enter 10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              {/* Requirement 5: Specific Delivery Area */}
               <div style={{ marginBottom: 12 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#fc8019', marginBottom: 4 }}>Delivery Area / Locality / Sector *</label>
                 <input required type="text" placeholder="e.g. Sector 62 / Raj Nagar / Shastri Nagar" value={customerForm.deliveryArea} onChange={e => setCustomerForm({ ...customerForm, deliveryArea: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid #fc8019', boxSizing: 'border-box', backgroundColor: '#fffaf6' }} />
@@ -1123,7 +1093,6 @@ export default function App() {
                 <input required type="text" placeholder="e.g. Near City Hospital / Opp. Central Bank" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box' }} />
               </div>
 
-              {/* Online Payment Box pointing to Admin Number */}
               <div style={{ backgroundColor: '#fff9f5', border: '1.5px solid #fed7aa', borderRadius: 12, padding: 16, marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, fontWeight: 900, color: '#c2410c' }}>PAY ONLINE DIRECT TO ADMIN</span>
@@ -1136,7 +1105,6 @@ export default function App() {
                   • UPI ID: <strong>{ADMIN_UPI}</strong>
                 </p>
 
-                {/* Scannable Admin UPI QR */}
                 <div style={{ textAlign: 'center', margin: '8px 0', backgroundColor: '#fff', padding: 10, borderRadius: 10, display: 'inline-block', width: '100%', boxSizing: 'border-box' }}>
                   <img src={ADMIN_QR_CODE_URL} alt="Admin UPI QR" style={{ width: 145, height: 145, borderRadius: 8 }} />
                   <div style={{ fontSize: 11, fontWeight: 800, color: '#fc8019', marginTop: 4 }}>
