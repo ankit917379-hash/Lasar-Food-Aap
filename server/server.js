@@ -90,7 +90,7 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
       { 
         $set: { 
           paymentConfirmed: true, 
-          status: 'Order Placed',
+          status: 'Food is being prepared',
           deliverySlot: deliverySlot || '30-40 mins'
         } 
       },
@@ -104,12 +104,12 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   }
 });
 
-// Direct status update or permanent purge
+// Update order status or delete when delivered / removed
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
 
-    if (status === 'Delivered' || status === 'Delete' || status === 'Cancelled') {
+    if (status === 'Delivered' || status === 'Delete') {
       const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
       if (!purgedOrder) return res.status(404).json({ error: 'Order not found' });
       console.log(`🧹 Purged order #${purgedOrder.orderId} from database.`);
@@ -118,7 +118,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
 
     const updatedOrder = await Order.findOneAndUpdate(
       { orderId: req.params.id },
-      { $set: { status } },
+      { $set: { status, paymentConfirmed: status !== 'Cancelled' } },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
@@ -128,10 +128,9 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// Returns active orders
 app.get('/api/orders', async (req, res) => {
   try {
-    const orders = await Order.find({ status: { $ne: 'Cancelled' } }).sort({ createdAt: -1 });
+    const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });

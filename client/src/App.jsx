@@ -51,6 +51,11 @@ export default function App() {
     address: '',
     landmark: ''
   });
+
+  // Persistent tracking using LocalStorage
+  const [trackedOrderId, setTrackedOrderId] = useState(() => {
+    return localStorage.getItem('lasar_last_order_id') || null;
+  });
   const [activeCustomerOrder, setActiveCustomerOrder] = useState(null);
   const [apiConnected, setApiConnected] = useState(false);
 
@@ -116,11 +121,18 @@ export default function App() {
     const res = await safeFetchJson(`${API_BASE}/api/orders`);
     if (res.ok && Array.isArray(res.data)) {
       setOrders(res.data);
-      if (activeCustomerOrder) {
-        const found = res.data.find(o => o.orderId === activeCustomerOrder.orderId);
-        if (found) {
-          setActiveCustomerOrder(found);
-        }
+      
+      // Auto-detect user's order by phone or stored ID
+      const userIdentifier = user?.phone;
+      const targetId = trackedOrderId;
+      
+      const found = res.data.find(o => 
+        (targetId && o.orderId === targetId) || 
+        (!isAdmin && userIdentifier && o.phone === userIdentifier)
+      );
+
+      if (found) {
+        setActiveCustomerOrder(found);
       }
     }
   };
@@ -137,7 +149,7 @@ export default function App() {
       }, 3000);
       return () => clearInterval(interval);
     }
-  }, [user, isAdmin, activeCustomerOrder?.orderId]);
+  }, [user, isAdmin, trackedOrderId]);
 
   // Auth Handlers
   const handleRequestAuth = async (e) => {
@@ -219,17 +231,16 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN ACCEPTS AND SETS TIME
+  // ADMIN APPROVES BANK CREDIT
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
-    // Update screen immediately
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
-      status: 'Order Placed',
+      status: 'Food is being prepared',
       deliverySlot: finalSlot
     } : o));
 
@@ -244,15 +255,10 @@ export default function App() {
     fetchOrders();
   };
 
-  // ADMIN REJECTS & PURGES INSTANTLY
+  // ADMIN REJECTS FAKE/UNPAID ORDER
   const handleRejectUnpaidOrder = async (orderId) => {
-    // Remove immediately from view
-    setOrders(prev => prev.filter(o => o.orderId !== orderId));
-    if (activeCustomerOrder?.orderId === orderId) {
-      setActiveCustomerOrder(null);
-    }
+    setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: 'Cancelled' } : o));
 
-    // Tell server to delete
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -262,11 +268,13 @@ export default function App() {
     fetchOrders();
   };
 
+  // STATUS UPDATES
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
-    if (newStatus === 'Delivered' || newStatus === 'Delete' || newStatus === 'Cancelled') {
+    if (newStatus === 'Delivered' || newStatus === 'Delete') {
       setOrders(prev => prev.filter(o => o.orderId !== orderId));
       if (activeCustomerOrder?.orderId === orderId) {
         setActiveCustomerOrder(null);
+        localStorage.removeItem('lasar_last_order_id');
       }
     } else {
       setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: newStatus } : o));
@@ -424,6 +432,8 @@ export default function App() {
     if (orderRes.ok && orderRes.data?.success) {
       const createdOrder = orderRes.data.order;
       setActiveCustomerOrder(createdOrder);
+      setTrackedOrderId(createdOrder.orderId);
+      localStorage.setItem('lasar_last_order_id', createdOrder.orderId);
       setCart([]);
       setOrderModalOpen(false);
       fetchOrders();
@@ -442,9 +452,6 @@ export default function App() {
     const matchesCat = selectedCategory === 'All' ? true : dish.category === selectedCategory;
     return matchesSearch && matchesVeg && matchesCat;
   });
-
-  // Only show active (non-cancelled) orders in kitchen list
-  const activeKitchenOrders = orders.filter(o => o.status !== 'Cancelled');
 
   // ==========================================
   // VIEW 1: GATEKEEPER LOGIN ONLY
@@ -639,7 +646,7 @@ export default function App() {
                   🍽️ Menu
                 </button>
                 <button onClick={() => { setActiveTab('partner'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'partner' ? '#fc8019' : '#f0f0f5', color: activeTab === 'partner' ? '#fff' : '#3d4152' }}>
-                  👨‍🍳 Kitchen ({activeKitchenOrders.length})
+                  👨‍🍳 Kitchen ({orders.length})
                 </button>
                 <button onClick={() => { setActiveTab('admin'); fetchAuditData(); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'admin' ? '#282c3f' : '#f0f0f5', color: activeTab === 'admin' ? '#fff' : '#3d4152' }}>
                   🛡️ Admin
@@ -661,11 +668,11 @@ export default function App() {
       {/* Main Content Area */}
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
-        {/* 1. CUSTOMER SWIGGY MENU VIEW */}
+        {/* 1. CUSTOMER SWIGGY MENU VIEW WITH GUARANTEED LIVE TRACKER */}
         {activeTab === 'customer' && (
           <div>
-            {/* Active Order Tracking Card */}
-            {activeCustomerOrder && (
+            {/* Real-time Order Tracking Box for Customer */}
+            {activeCustomerOrder ? (
               <div style={{
                 backgroundColor: '#ffffff',
                 borderRadius: 16,
@@ -674,6 +681,7 @@ export default function App() {
                 boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
                 borderLeft: `6px solid ${
                   activeCustomerOrder.status === 'Cancelled' ? '#e43b4f' :
+                  activeCustomerOrder.status === 'Delivered' ? '#282c3f' :
                   activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#f59e0b'
                 }`
               }}>
@@ -683,15 +691,22 @@ export default function App() {
                       fontSize: 11,
                       fontWeight: 900,
                       color: activeCustomerOrder.status === 'Cancelled' ? '#e43b4f' :
+                             activeCustomerOrder.status === 'Delivered' ? '#282c3f' :
                              activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#b45309',
                       letterSpacing: 0.8,
                       textTransform: 'uppercase'
                     }}>
                       {activeCustomerOrder.status === 'Cancelled'
-                        ? '❌ ORDER CANCELLED (PAYMENT NOT RECEIVED)'
+                        ? '❌ ORDER CANCELLED / PAYMENT NOT FOUND'
+                        : activeCustomerOrder.status === 'Delivered'
+                        ? '📦 ORDER DELIVERED'
+                        : activeCustomerOrder.status === 'Out for Delivery'
+                        ? '🛵 OUT FOR DELIVERY'
+                        : activeCustomerOrder.status === 'Food Ready'
+                        ? '🍽️ FOOD IS READY'
                         : activeCustomerOrder.paymentConfirmed
-                        ? '🎉 ORDER CONFIRMED & IN PREPARATION'
-                        : '⏳ PAYMENT VERIFICATION PENDING'}
+                        ? '👨‍🍳 ORDER ACCEPTED & PREPARING'
+                        : '⏳ VERIFYING PAYMENT IN BANK...'}
                     </span>
                     <h3 style={{ margin: '2px 0', fontSize: 16, color: '#282c3f' }}>Order #{activeCustomerOrder.orderId}</h3>
                     <p style={{ margin: 0, fontSize: 12, color: '#7e808c' }}>
@@ -699,14 +714,27 @@ export default function App() {
                     </p>
                   </div>
 
-                  {activeCustomerOrder.paymentConfirmed && (
-                    <div style={{ textAlign: 'right' }}>
-                      <span style={{ fontSize: 10, color: '#7e808c', display: 'block' }}>Delivery Passcode</span>
-                      <div style={{ fontSize: 16, fontWeight: 900, color: '#282c3f' }}>{activeCustomerOrder.otp}</div>
-                    </div>
-                  )}
+                  <div style={{ textAlign: 'right' }}>
+                    {activeCustomerOrder.status === 'Cancelled' ? (
+                      <button
+                        onClick={() => {
+                          setActiveCustomerOrder(null);
+                          setTrackedOrderId(null);
+                          localStorage.removeItem('lasar_last_order_id');
+                        }}
+                        style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fee2e2', color: '#b91c1c', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                        Dismiss
+                      </button>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: 10, color: '#7e808c', display: 'block' }}>Delivery Passcode</span>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: '#282c3f' }}>{activeCustomerOrder.otp}</div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
+                {/* Status Message */}
                 {activeCustomerOrder.status === 'Cancelled' ? (
                   <div style={{
                     marginTop: 12,
@@ -718,7 +746,7 @@ export default function App() {
                     color: '#991b1b',
                     fontWeight: 700
                   }}>
-                    ⚠️ Payment was not received in bank account. This order was cancelled.
+                    ⚠️ <strong>Payment was not received in our bank.</strong> Admin rejected this order. Please place a new order and ensure UPI payment is completed.
                   </div>
                 ) : !activeCustomerOrder.paymentConfirmed ? (
                   <div style={{
@@ -732,8 +760,8 @@ export default function App() {
                     fontWeight: 700,
                     lineHeight: 1.4
                   }}>
-                    🔍 <strong>Verifying Bank Credit...</strong><br/>
-                    Admin is cross-checking incoming funds in their bank app. Your order will be confirmed once payment is approved.
+                    🔍 <strong>Verifying Your Transfer...</strong><br/>
+                    Admin is checking bank records. Once verified, preparation will start and your delivery time slot will appear here.
                   </div>
                 ) : (
                   <div style={{
@@ -752,27 +780,29 @@ export default function App() {
                         Delivery Time Slot
                       </div>
                       <div style={{ fontSize: 13, fontWeight: 900, color: '#065f46' }}>
-                        {activeCustomerOrder.deliverySlot || '30-45 mins'}
+                        {activeCustomerOrder.deliverySlot || '30-40 mins'}
                       </div>
                     </div>
                   </div>
                 )}
 
+                {/* Live Progress Bar */}
                 {activeCustomerOrder.status !== 'Cancelled' && (
                   <div style={{ margin: '14px 0 6px 0', backgroundColor: '#f0f0f5', borderRadius: 6, height: 6, overflow: 'hidden' }}>
                     <div style={{ 
                       height: '100%', 
                       backgroundColor: activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#f59e0b', 
-                      width: !activeCustomerOrder.paymentConfirmed ? '25%' :
-                             activeCustomerOrder.status === 'Order Placed' ? '50%' :
-                             activeCustomerOrder.status === 'Food is being prepared' ? '70%' :
-                             activeCustomerOrder.status === 'Food Ready' ? '85%' : '98%',
+                      width: !activeCustomerOrder.paymentConfirmed ? '20%' :
+                             activeCustomerOrder.status === 'Order Placed' ? '40%' :
+                             activeCustomerOrder.status === 'Food is being prepared' ? '65%' :
+                             activeCustomerOrder.status === 'Food Ready' ? '80%' :
+                             activeCustomerOrder.status === 'Out for Delivery' ? '92%' : '100%',
                       transition: 'width 0.5s ease'
                     }}></div>
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
 
             {/* Search and Veg Toggle Filter */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
@@ -873,33 +903,33 @@ export default function App() {
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #fc8019' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
-                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({activeKitchenOrders.length})</h2>
-                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Cross-check bank credit. Confirm if received or Reject & Delete if unpaid.</p>
+                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({orders.length})</h2>
+                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Cross-check bank credit. Confirm if received or Reject if unpaid.</p>
                 </div>
                 <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
               </div>
 
-              {activeKitchenOrders.length === 0 ? (
+              {orders.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '24px 0', color: '#7e808c', fontSize: 13 }}>
-                  🎉 No pending or active orders right now.
+                  🎉 No orders currently.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {activeKitchenOrders.map(order => (
-                    <div key={order.orderId} style={{ border: `1.5px solid ${order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
+                  {orders.map(order => (
+                    <div key={order.orderId} style={{ border: `1.5px solid ${order.status === 'Cancelled' ? '#fecaca' : order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 8, marginBottom: 8 }}>
                         <div>
                           <span style={{ fontSize: 13, fontWeight: 900, color: '#282c3f' }}>#{order.orderId}</span>
                           <span style={{
                             marginLeft: 8,
                             fontSize: 10,
-                            backgroundColor: order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
-                            color: order.paymentConfirmed ? '#0f8a65' : '#b45309',
+                            backgroundColor: order.status === 'Cancelled' ? '#fef2f2' : order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
+                            color: order.status === 'Cancelled' ? '#e43b4f' : order.paymentConfirmed ? '#0f8a65' : '#b45309',
                             padding: '3px 8px',
                             borderRadius: 6,
                             fontWeight: 900
                           }}>
-                            {order.paymentConfirmed ? '✓ BANK VERIFIED' : '⚠️ AWAITING BANK CREDIT'}
+                            {order.status === 'Cancelled' ? '❌ CANCELLED' : order.paymentConfirmed ? `✓ ${order.status.toUpperCase()}` : '⚠️ AWAITING BANK CREDIT'}
                           </span>
                         </div>
                         <div style={{ fontSize: 15, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
@@ -924,7 +954,13 @@ export default function App() {
 
                       {/* State-specific button rendering */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {!order.paymentConfirmed ? (
+                        {order.status === 'Cancelled' ? (
+                          <button 
+                            onClick={() => handleUpdateOrderStatus(order.orderId, 'Delete')}
+                            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fee2e2', color: '#b91c1c', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                            🗑️ Delete Record Permanently
+                          </button>
+                        ) : !order.paymentConfirmed ? (
                           <>
                             <button
                               onClick={() => { setSlotModalOrder(order); setCustomSlotInput('30-40 mins'); }}
@@ -934,7 +970,7 @@ export default function App() {
                             <button 
                               onClick={() => handleRejectUnpaidOrder(order.orderId)}
                               style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fff', color: '#dc2626', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
-                              ✕ Reject & Delete (Unpaid/Cancelled)
+                              ✕ Reject (Unpaid / Fake)
                             </button>
                           </>
                         ) : (
@@ -952,7 +988,7 @@ export default function App() {
                             <button 
                               onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
                               style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
-                              ✓ Mark Delivered & Clear Data
+                              ✓ Mark Delivered & Clear
                             </button>
                           </>
                         )}
