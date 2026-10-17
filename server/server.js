@@ -13,9 +13,6 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log('🍃 Connected to MongoDB Atlas Cloud Database successfully!'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
-const activeSessions = new Map();
-const ADMIN_UPI = 'ankit917379@okhdfcbank';
-
 const MenuItemSchema = new mongoose.Schema({
   restaurantId: { type: String, default: 'rest_lasar_01' },
   restaurantName: { type: String, default: 'LASAR Cloud Kitchen' },
@@ -40,11 +37,10 @@ const OrderSchema = new mongoose.Schema({
   items: Array,
   totalAmount: Number,
   paymentConfirmed: { type: Boolean, default: true },
-  paymentId: { type: String, default: '' },
-  deliverySlot: { type: String, default: '' }, // Blank until Admin manually assigns it
+  deliverySlot: { type: String, default: '' },
   status: { 
     type: String, 
-    enum: ['Order Placed', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered'],
+    enum: ['Order Placed', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered', 'Cancelled'],
     default: 'Order Placed' 
   },
   otp: Number,
@@ -58,52 +54,10 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Create Automated Payment Session
-app.post('/api/payment/create-session', (req, res) => {
-  const { amount, customerName, phone } = req.body;
-  const sessionId = 'PAY_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
-  const upiIntentUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${amount}&cu=INR&tn=${sessionId}`;
-
-  activeSessions.set(sessionId, {
-    amount,
-    customerName,
-    phone,
-    status: 'PENDING',
-    createdAt: Date.now()
-  });
-
-  setTimeout(() => {
-    if (activeSessions.has(sessionId)) {
-      const sess = activeSessions.get(sessionId);
-      sess.status = 'SUCCESS';
-      activeSessions.set(sessionId, sess);
-    }
-  }, 4000);
-
-  res.json({ success: true, paymentSessionId: sessionId, upiIntentUrl });
-});
-
-// Verify Real-Time Payment Status
-app.get('/api/payment/verify-status', (req, res) => {
-  const { sessionId } = req.query;
-  const session = activeSessions.get(sessionId);
-  if (!session) return res.json({ paid: false });
-
-  if (session.status === 'SUCCESS') {
-    return res.json({ paid: true, paymentId: sessionId });
-  }
-
-  res.json({ paid: false });
-});
-
-// Create Order (Payment verified)
+// Create Order
 app.post('/api/orders', async (req, res) => {
   try {
-    const { customerName, phone, deliveryArea, address, landmark, items, totalAmount, paymentId } = req.body;
-    
-    if (!paymentId) {
-      return res.status(400).json({ error: 'Payment could not be verified by bank. Order rejected.' });
-    }
+    const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
 
     const order = new Order({
       orderId: 'LSR-' + Math.floor(100000 + Math.random() * 900000),
@@ -115,13 +69,12 @@ app.post('/api/orders', async (req, res) => {
       items,
       totalAmount,
       paymentConfirmed: true,
-      paymentId,
-      deliverySlot: '', // Set by admin after placement
+      deliverySlot: '',
       status: 'Order Placed',
       otp: Math.floor(1000 + Math.random() * 9000)
     });
     await order.save();
-    console.log(`✅ Order Created: #${order.orderId} for ₹${totalAmount}`);
+    console.log(`✅ Order Placed: #${order.orderId} for ₹${totalAmount}`);
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -145,15 +98,15 @@ app.patch('/api/orders/:id/delivery-slot', async (req, res) => {
   }
 });
 
-// Update order status or delete when delivered
+// Update order status or delete when delivered / cancelled
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
 
-    if (status === 'Delivered' || status === 'Delete') {
+    if (status === 'Delivered' || status === 'Delete' || status === 'Cancelled') {
       const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
       if (!purgedOrder) return res.status(404).json({ error: 'Order not found' });
-      console.log(`🧹 Purged order #${purgedOrder.orderId} from MongoDB.`);
+      console.log(`🧹 Removed order #${purgedOrder.orderId} from database.`);
       return res.json({ success: true, delivered: true, purged: true, orderId: purgedOrder.orderId });
     }
 

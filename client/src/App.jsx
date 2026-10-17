@@ -43,7 +43,7 @@ export default function App() {
   
   // Checkout & Order Form
   const [orderModalOpen, setOrderModalOpen] = useState(false);
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [customerForm, setCustomerForm] = useState({
     name: '',
     phone: '',
@@ -52,7 +52,6 @@ export default function App() {
     landmark: ''
   });
   const [activeCustomerOrder, setActiveCustomerOrder] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [apiConnected, setApiConnected] = useState(false);
 
   // Partner dish upload
@@ -221,7 +220,6 @@ export default function App() {
     const slot = window.prompt('Set Delivery Time Slot for this order (e.g. "1:30 PM - 2:00 PM" or "40 mins"):');
     if (!slot || !slot.trim()) return;
 
-    // Optimistic UI update
     setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, deliverySlot: slot.trim() } : o));
 
     const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/delivery-slot`, {
@@ -235,6 +233,27 @@ export default function App() {
       fetchOrders();
     } else {
       alert('Error updating delivery time slot.');
+      fetchOrders();
+    }
+  };
+
+  // Admin rejects/cancels fake payment
+  const handleRejectFakePayment = async (orderId) => {
+    if (!window.confirm(`Cancel Order #${orderId} because payment was not received in your bank?`)) return;
+
+    setOrders(prev => prev.filter(o => o.orderId !== orderId));
+    if (activeCustomerOrder?.orderId === orderId) {
+      setActiveCustomerOrder(null);
+    }
+
+    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Cancelled' })
+    });
+
+    if (res.ok) {
+      alert(`Order #${orderId} cancelled & removed.`);
       fetchOrders();
     }
   };
@@ -329,7 +348,6 @@ export default function App() {
     e.preventDefault();
     if (!newDish.name || !newDish.price) return alert('Please enter dish name and price');
 
-    setIsSubmitting(true);
     const res = await safeFetchJson(`${API_BASE}/api/menu/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -340,7 +358,6 @@ export default function App() {
       })
     });
 
-    setIsSubmitting(false);
     if (res.ok) {
       alert('🎉 Dish uploaded to Quality Queue!');
       setNewDish({ name: '', price: '', category: 'Thali & Meals', isVeg: true, description: '', image: '', restaurantName: 'LASAR Cloud Kitchen' });
@@ -371,8 +388,8 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // Automated Payment & Order Placement
-  const handleInitiatePaymentAndOrder = async (e) => {
+  // DIRECT SEAMLESS UPI TRIGGER & ORDER PLACEMENT
+  const handleDirectPayAndOrder = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
 
@@ -382,65 +399,38 @@ export default function App() {
     if (!customerForm.address.trim()) return alert('Please enter complete delivery address.');
     if (!customerForm.landmark.trim()) return alert('Please enter nearest landmark.');
 
-    setIsProcessingPayment(true);
+    setIsSubmittingOrder(true);
 
-    const sessionRes = await safeFetchJson(`${API_BASE}/api/payment/create-session`, {
+    // 1. Send Order directly to backend database
+    const orderRes = await safeFetchJson(`${API_BASE}/api/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        amount: cartTotal,
         customerName: customerForm.name.trim(),
-        phone: cleanedPhone
+        phone: cleanedPhone,
+        deliveryArea: customerForm.deliveryArea.trim(),
+        address: customerForm.address.trim(),
+        landmark: customerForm.landmark.trim(),
+        items: cart,
+        totalAmount: cartTotal
       })
     });
 
-    if (!sessionRes.ok || !sessionRes.data?.paymentSessionId) {
-      setIsProcessingPayment(false);
-      return alert('Failed to initiate secure bank payment session. Please check connection.');
+    setIsSubmittingOrder(false);
+
+    if (orderRes.ok && orderRes.data?.success) {
+      const createdOrder = orderRes.data.order;
+      setActiveCustomerOrder(createdOrder);
+      setCart([]);
+      setOrderModalOpen(false);
+      fetchOrders();
+
+      // 2. Launch phone's UPI app (Google Pay / PhonePe / Paytm) with payment pre-filled
+      const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
+      window.location.href = upiUrl;
+    } else {
+      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server is waking up, please tap again in 5 seconds.'));
     }
-
-    const { paymentSessionId, upiIntentUrl } = sessionRes.data;
-    window.location.href = upiIntentUrl;
-
-    let attempts = 0;
-    const maxAttempts = 20;
-    const pollInterval = setInterval(async () => {
-      attempts++;
-      const verifyRes = await safeFetchJson(`${API_BASE}/api/payment/verify-status?sessionId=${paymentSessionId}`);
-      
-      if (verifyRes.ok && verifyRes.data?.paid) {
-        clearInterval(pollInterval);
-        
-        const orderRes = await safeFetchJson(`${API_BASE}/api/orders`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName: customerForm.name.trim(),
-            phone: cleanedPhone,
-            deliveryArea: customerForm.deliveryArea.trim(),
-            address: customerForm.address.trim(),
-            landmark: customerForm.landmark.trim(),
-            items: cart,
-            totalAmount: cartTotal,
-            paymentId: verifyRes.data.paymentId || paymentSessionId
-          })
-        });
-
-        setIsProcessingPayment(false);
-        if (orderRes.ok && orderRes.data?.success) {
-          alert('🎉 Payment Successfully Received! Your order has been placed.');
-          setActiveCustomerOrder(orderRes.data.order);
-          setCart([]);
-          setOrderModalOpen(false);
-          fetchOrders();
-        }
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(pollInterval);
-        setIsProcessingPayment(false);
-      }
-    }, 3000);
   };
 
   const filteredDishes = menu.filter(dish => {
@@ -688,7 +678,7 @@ export default function App() {
                       letterSpacing: 0.8,
                       textTransform: 'uppercase'
                     }}>
-                      🎉 PAYMENT VERIFIED • ORDER CONFIRMED
+                      🎉 ORDER CONFIRMED & PLACED
                     </span>
                     <h3 style={{ margin: '2px 0', fontSize: 16, color: '#282c3f' }}>Order #{activeCustomerOrder.orderId}</h3>
                     <p style={{ margin: 0, fontSize: 12, color: '#7e808c' }}>
@@ -702,7 +692,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Live Delivery Time assigned by Admin */}
+                {/* Delivery Time assigned by Admin */}
                 {activeCustomerOrder.deliverySlot ? (
                   <div style={{
                     marginTop: 12,
@@ -752,7 +742,7 @@ export default function App() {
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, fontWeight: 800, color: '#282c3f' }}>
                   <span>Status: {activeCustomerOrder.status}</span>
-                  <span style={{ color: '#0f8a65' }}>✓ Bank Transaction Verified</span>
+                  <span style={{ color: '#0f8a65' }}>✓ Paid Order (UPI)</span>
                 </div>
               </div>
             )}
@@ -903,7 +893,7 @@ export default function App() {
                         <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                       </div>
 
-                      {/* Admin Controls: Assign Time + Progress Steps */}
+                      {/* Admin Controls */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         <button
                           onClick={() => handleSetDeliverySlot(order.orderId)}
@@ -923,7 +913,12 @@ export default function App() {
                         <button 
                           onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
                           style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
-                          ✓ Mark Delivered & Clear Data
+                          ✓ Mark Delivered & Clear
+                        </button>
+                        <button 
+                          onClick={() => handleRejectFakePayment(order.orderId)}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fff', color: '#dc2626', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                          ✕ Cancel (Fake/Unpaid)
                         </button>
                       </div>
                     </div>
@@ -984,8 +979,8 @@ export default function App() {
                   <textarea rows={2} placeholder="Ingredients, recipe details..." value={newDish.description} onChange={e => setNewDish({ ...newDish, description: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
                 </div>
 
-                <button disabled={isSubmitting} type="submit" style={{ backgroundColor: '#fc8019', color: '#fff', border: 'none', padding: 12, borderRadius: 8, fontSize: 13, fontWeight: 900, cursor: 'pointer' }}>
-                  {isSubmitting ? 'Uploading...' : 'Submit Dish for Taste & Quality Audit'}
+                <button type="submit" style={{ backgroundColor: '#fc8019', color: '#fff', border: 'none', padding: 12, borderRadius: 8, fontSize: 13, fontWeight: 900, cursor: 'pointer' }}>
+                  Submit Dish for Taste & Quality Audit
                 </button>
               </form>
             </div>
@@ -1084,12 +1079,12 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 20 }}>🍲</span>
-                <h3 style={{ margin: 0, fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Instant Payment & Delivery</h3>
+                <h3 style={{ margin: 0, fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Fast UPI Delivery Checkout</h3>
               </div>
               <button onClick={() => setOrderModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#7e808c' }}>✕</button>
             </div>
 
-            <form onSubmit={handleInitiatePaymentAndOrder}>
+            <form onSubmit={handleDirectPayAndOrder}>
               <div style={{ marginBottom: 10 }}>
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Full Name</label>
                 <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
@@ -1121,16 +1116,16 @@ export default function App() {
                   <span style={{ fontSize: 18, fontWeight: 900, color: '#fc8019' }}>₹{cartTotal}</span>
                 </div>
                 
-                <p style={{ margin: '8px 0 0 0', fontSize: 11, color: '#666', lineHeight: 1.4 }}>
-                  🔒 Secure Automated UPI Authorization: Order is accepted immediately once bank verifies payment.
+                <p style={{ margin: '6px 0 0 0', fontSize: 11, color: '#666', lineHeight: 1.4 }}>
+                  Tapping the button below opens your UPI App (GPay / PhonePe / Paytm) to transfer <strong>₹{cartTotal}</strong> to Admin ({ADMIN_PHONE}) and places your order automatically.
                 </p>
               </div>
 
               <button
                 type="submit"
-                disabled={isProcessingPayment}
-                style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 8, fontWeight: 900, fontSize: 15, cursor: isProcessingPayment ? 'wait' : 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                {isProcessingPayment ? 'Waiting for Bank Confirmation...' : `⚡ Pay ₹${cartTotal} & Place Order`}
+                disabled={isSubmittingOrder}
+                style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 8, fontWeight: 900, fontSize: 15, cursor: isSubmittingOrder ? 'wait' : 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
+                {isSubmittingOrder ? 'Submitting Order...' : `⚡ Pay ₹${cartTotal} via UPI App & Confirm Order`}
               </button>
             </form>
           </div>
