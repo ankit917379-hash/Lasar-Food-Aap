@@ -36,12 +36,12 @@ const OrderSchema = new mongoose.Schema({
   landmark: { type: String, default: '' },
   items: Array,
   totalAmount: Number,
-  paymentConfirmed: { type: Boolean, default: true },
+  paymentConfirmed: { type: Boolean, default: false }, // Gated: False until Admin verifies bank receipt
   deliverySlot: { type: String, default: '' },
   status: { 
     type: String, 
-    enum: ['Order Placed', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered', 'Cancelled'],
-    default: 'Order Placed' 
+    enum: ['Payment Verification Pending', 'Order Placed', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered', 'Cancelled'],
+    default: 'Payment Verification Pending' 
   },
   otp: Number,
   createdAt: { type: Date, default: Date.now }
@@ -54,7 +54,7 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Create Order
+// Create Order (Enters as Payment Verification Pending - NOT confirmed yet)
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -68,30 +68,36 @@ app.post('/api/orders', async (req, res) => {
       landmark: landmark || '',
       items,
       totalAmount,
-      paymentConfirmed: true,
+      paymentConfirmed: false,
       deliverySlot: '',
-      status: 'Order Placed',
+      status: 'Payment Verification Pending',
       otp: Math.floor(1000 + Math.random() * 9000)
     });
     await order.save();
-    console.log(`✅ Order Placed: #${order.orderId} for ₹${totalAmount}`);
+    console.log(`⏳ Awaiting Bank Verification: #${order.orderId} for ₹${totalAmount}`);
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Admin updates delivery time slot
-app.patch('/api/orders/:id/delivery-slot', async (req, res) => {
+// Admin confirms bank credit & sets delivery time
+app.patch('/api/orders/:id/verify-payment', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
     const updatedOrder = await Order.findOneAndUpdate(
       { orderId: req.params.id },
-      { $set: { deliverySlot } },
+      { 
+        $set: { 
+          paymentConfirmed: true, 
+          status: 'Order Placed',
+          deliverySlot: deliverySlot || '30-40 mins'
+        } 
+      },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`🕒 Delivery time slot updated for #${updatedOrder.orderId}: ${deliverySlot}`);
+    console.log(`✅ Admin verified bank credit for #${updatedOrder.orderId}! Slot: ${deliverySlot}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });

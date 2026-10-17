@@ -130,7 +130,7 @@ export default function App() {
 
       const interval = setInterval(() => {
         fetchOrders();
-      }, 3500);
+      }, 3000);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin, activeCustomerOrder?.orderId]);
@@ -215,36 +215,29 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // Admin sets or edits delivery time slot
-  const handleSetDeliverySlot = async (orderId) => {
-    const slot = window.prompt('Set Delivery Time Slot for this order (e.g. "1:30 PM - 2:00 PM" or "40 mins"):');
+  // ADMIN VERIFIES ACTUAL BANK CREDIT & SETS TIME
+  const handleVerifyBankPaymentAndAccept = async (orderId) => {
+    const slot = window.prompt('Bank Credit Confirmed! Set delivery time slot (e.g. "30-40 mins" or "1:30 PM - 2:00 PM"):', '30-40 mins');
     if (!slot || !slot.trim()) return;
 
-    setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, deliverySlot: slot.trim() } : o));
-
-    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/delivery-slot`, {
+    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/verify-payment`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deliverySlot: slot.trim() })
     });
 
-    if (res.ok) {
-      alert(`Delivery time updated to "${slot.trim()}" for Order #${orderId}`);
-      fetchOrders();
+    if (res.ok && res.data?.order) {
+      alert(`Order #${orderId} verified and accepted! Customer tracking updated.`);
+      setOrders(prev => prev.map(o => o.orderId === orderId ? res.data.order : o));
     } else {
-      alert('Error updating delivery time slot.');
+      alert('Error updating order.');
       fetchOrders();
     }
   };
 
-  // Admin rejects/cancels fake payment
-  const handleRejectFakePayment = async (orderId) => {
-    if (!window.confirm(`Cancel Order #${orderId} because payment was not received in your bank?`)) return;
-
-    setOrders(prev => prev.filter(o => o.orderId !== orderId));
-    if (activeCustomerOrder?.orderId === orderId) {
-      setActiveCustomerOrder(null);
-    }
+  // ADMIN REJECTS UNPAID/FAKE ORDERS
+  const handleRejectUnpaidOrder = async (orderId) => {
+    if (!window.confirm(`Reject Order #${orderId}? Customer will be notified that payment was not received in bank.`)) return;
 
     const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
@@ -253,7 +246,7 @@ export default function App() {
     });
 
     if (res.ok) {
-      alert(`Order #${orderId} cancelled & removed.`);
+      alert(`Order #${orderId} marked as Cancelled & removed.`);
       fetchOrders();
     }
   };
@@ -388,8 +381,8 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // DIRECT SEAMLESS UPI TRIGGER & ORDER PLACEMENT
-  const handleDirectPayAndOrder = async (e) => {
+  // INITIATE PAYMENT: CREATES PENDING ORDER & LAUNCHES UPI
+  const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
 
@@ -401,7 +394,7 @@ export default function App() {
 
     setIsSubmittingOrder(true);
 
-    // 1. Send Order directly to backend database
+    // Creates order in 'Payment Verification Pending' state
     const orderRes = await safeFetchJson(`${API_BASE}/api/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -425,11 +418,11 @@ export default function App() {
       setOrderModalOpen(false);
       fetchOrders();
 
-      // 2. Launch phone's UPI app (Google Pay / PhonePe / Paytm) with payment pre-filled
+      // Launch UPI App to complete actual transfer
       const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
       window.location.href = upiUrl;
     } else {
-      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server is waking up, please tap again in 5 seconds.'));
+      alert('Could not initiate order. Please try again.');
     }
   };
 
@@ -667,18 +660,26 @@ export default function App() {
                 padding: 18,
                 marginBottom: 16,
                 boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
-                borderLeft: '6px solid #0f8a65'
+                borderLeft: `6px solid ${
+                  activeCustomerOrder.status === 'Cancelled' ? '#e43b4f' :
+                  activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#f59e0b'
+                }`
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                   <div>
                     <span style={{
-                      fontSize: 10,
+                      fontSize: 11,
                       fontWeight: 900,
-                      color: '#0f8a65',
+                      color: activeCustomerOrder.status === 'Cancelled' ? '#e43b4f' :
+                             activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#b45309',
                       letterSpacing: 0.8,
                       textTransform: 'uppercase'
                     }}>
-                      🎉 ORDER CONFIRMED & PLACED
+                      {activeCustomerOrder.status === 'Cancelled'
+                        ? '❌ ORDER CANCELLED (PAYMENT NOT RECEIVED)'
+                        : activeCustomerOrder.paymentConfirmed
+                        ? '🎉 ORDER CONFIRMED & IN PREPARATION'
+                        : '⏳ PAYMENT VERIFICATION PENDING'}
                     </span>
                     <h3 style={{ margin: '2px 0', fontSize: 16, color: '#282c3f' }}>Order #{activeCustomerOrder.orderId}</h3>
                     <p style={{ margin: 0, fontSize: 12, color: '#7e808c' }}>
@@ -686,14 +687,44 @@ export default function App() {
                     </p>
                   </div>
 
-                  <div style={{ textAlign: 'right' }}>
-                    <span style={{ fontSize: 10, color: '#7e808c', display: 'block' }}>Delivery Passcode</span>
-                    <div style={{ fontSize: 16, fontWeight: 900, color: '#282c3f' }}>{activeCustomerOrder.otp}</div>
-                  </div>
+                  {activeCustomerOrder.paymentConfirmed && (
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ fontSize: 10, color: '#7e808c', display: 'block' }}>Delivery Passcode</span>
+                      <div style={{ fontSize: 16, fontWeight: 900, color: '#282c3f' }}>{activeCustomerOrder.otp}</div>
+                    </div>
+                  )}
                 </div>
 
-                {/* Delivery Time assigned by Admin */}
-                {activeCustomerOrder.deliverySlot ? (
+                {/* Status Banners */}
+                {activeCustomerOrder.status === 'Cancelled' ? (
+                  <div style={{
+                    marginTop: 12,
+                    backgroundColor: '#fef2f2',
+                    border: '1.5px solid #fecaca',
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    fontSize: 12,
+                    color: '#991b1b',
+                    fontWeight: 700
+                  }}>
+                    ⚠️ We checked our bank account and could not find your payment. This order was cancelled.
+                  </div>
+                ) : !activeCustomerOrder.paymentConfirmed ? (
+                  <div style={{
+                    marginTop: 12,
+                    backgroundColor: '#fffbeb',
+                    border: '1.5px solid #fde68a',
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    fontSize: 12,
+                    color: '#92400e',
+                    fontWeight: 700,
+                    lineHeight: 1.4
+                  }}>
+                    🔍 <strong>Verifying Bank Credit...</strong><br/>
+                    Admin is cross-checking incoming funds in their bank app. Your order will be accepted as soon as payment is confirmed.
+                  </div>
+                ) : (
                   <div style={{
                     marginTop: 12,
                     backgroundColor: '#eaf8f2',
@@ -707,43 +738,29 @@ export default function App() {
                     <span style={{ fontSize: 18 }}>🕒</span>
                     <div>
                       <div style={{ fontSize: 10, fontWeight: 900, color: '#0f8a65', textTransform: 'uppercase' }}>
-                        Delivery Time Slot (Set by Kitchen)
+                        Delivery Time Slot
                       </div>
                       <div style={{ fontSize: 13, fontWeight: 900, color: '#065f46' }}>
-                        {activeCustomerOrder.deliverySlot}
+                        {activeCustomerOrder.deliverySlot || '30-45 mins'}
                       </div>
                     </div>
                   </div>
-                ) : (
-                  <div style={{
-                    marginTop: 12,
-                    backgroundColor: '#fff7ed',
-                    border: '1.5px solid #ffedd5',
-                    borderRadius: 10,
-                    padding: '8px 12px',
-                    fontSize: 11,
-                    color: '#c2410c',
-                    fontWeight: 700
-                  }}>
-                    🕒 Kitchen is preparing your food. Admin is assigning your delivery time slot...
-                  </div>
                 )}
 
-                <div style={{ margin: '12px 0 6px 0', backgroundColor: '#f0f0f5', borderRadius: 6, height: 6, overflow: 'hidden' }}>
-                  <div style={{ 
-                    height: '100%', 
-                    backgroundColor: '#0f8a65', 
-                    width: activeCustomerOrder.status === 'Order Placed' ? '40%' :
-                           activeCustomerOrder.status === 'Food is being prepared' ? '65%' :
-                           activeCustomerOrder.status === 'Food Ready' ? '80%' : '95%',
-                    transition: 'width 0.5s ease'
-                  }}></div>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, fontWeight: 800, color: '#282c3f' }}>
-                  <span>Status: {activeCustomerOrder.status}</span>
-                  <span style={{ color: '#0f8a65' }}>✓ Paid Order (UPI)</span>
-                </div>
+                {/* Progress Bar (Only advances after Admin verifies payment) */}
+                {activeCustomerOrder.status !== 'Cancelled' && (
+                  <div style={{ margin: '14px 0 6px 0', backgroundColor: '#f0f0f5', borderRadius: 6, height: 6, overflow: 'hidden' }}>
+                    <div style={{ 
+                      height: '100%', 
+                      backgroundColor: activeCustomerOrder.paymentConfirmed ? '#0f8a65' : '#f59e0b', 
+                      width: !activeCustomerOrder.paymentConfirmed ? '25%' :
+                             activeCustomerOrder.status === 'Order Placed' ? '50%' :
+                             activeCustomerOrder.status === 'Food is being prepared' ? '70%' :
+                             activeCustomerOrder.status === 'Food Ready' ? '85%' : '98%',
+                      transition: 'width 0.5s ease'
+                    }}></div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -846,8 +863,8 @@ export default function App() {
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #fc8019' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
-                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Active Orders ({orders.length})</h2>
-                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Assign delivery slot to notify customer, update preparation status, and deliver.</p>
+                  <h2 style={{ margin: '0 0 2px 0', fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Kitchen Incoming Orders ({orders.length})</h2>
+                  <p style={{ margin: 0, fontSize: 11, color: '#7e808c' }}>Check your bank app. Only verify after payment reflects in your account.</p>
                 </div>
                 <button onClick={fetchOrders} style={{ padding: '5px 10px', fontSize: 11, borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer', fontWeight: 700 }}>🔄 Refresh</button>
               </div>
@@ -859,23 +876,23 @@ export default function App() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   {orders.map(order => (
-                    <div key={order.orderId} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
+                    <div key={order.orderId} style={{ border: `1.5px solid ${order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 8, marginBottom: 8 }}>
                         <div>
                           <span style={{ fontSize: 13, fontWeight: 900, color: '#282c3f' }}>#{order.orderId}</span>
                           <span style={{
                             marginLeft: 8,
                             fontSize: 10,
-                            backgroundColor: '#eaf8f2',
-                            color: '#0f8a65',
-                            padding: '2px 6px',
-                            borderRadius: 4,
-                            fontWeight: 800
+                            backgroundColor: order.status === 'Cancelled' ? '#fef2f2' : order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
+                            color: order.status === 'Cancelled' ? '#e43b4f' : order.paymentConfirmed ? '#0f8a65' : '#b45309',
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            fontWeight: 900
                           }}>
-                            ✓ Paid Order
+                            {order.status === 'Cancelled' ? '❌ CANCELLED' : order.paymentConfirmed ? '✓ BANK VERIFIED' : '⚠️ AWAITING BANK CREDIT'}
                           </span>
                         </div>
-                        <div style={{ fontSize: 14, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
+                        <div style={{ fontSize: 15, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
                       </div>
 
                       <div style={{ backgroundColor: '#f8fafc', borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12, lineHeight: 1.5 }}>
@@ -883,9 +900,11 @@ export default function App() {
                         <div>📍 <strong>Delivery Area:</strong> <span style={{ color: '#fc8019', fontWeight: 800 }}>{order.deliveryArea || 'Not specified'}</span></div>
                         <div>🏠 <strong>Complete Address:</strong> {order.address}</div>
                         <div>🚩 <strong>Nearest Landmark:</strong> {order.landmark || 'N/A'}</div>
-                        <div style={{ marginTop: 4, color: '#0f8a65', fontWeight: 800 }}>
-                          🕒 <strong>Delivery Time Slot:</strong> {order.deliverySlot ? order.deliverySlot : <span style={{ color: '#c2410c' }}>Not assigned yet</span>}
-                        </div>
+                        {order.deliverySlot && (
+                          <div style={{ marginTop: 4, color: '#0f8a65', fontWeight: 800 }}>
+                            🕒 <strong>Delivery Time Slot:</strong> {order.deliverySlot}
+                          </div>
+                        )}
                         <div style={{ marginTop: 2, color: '#0f8a65', fontWeight: 800 }}>🔐 Passcode: {order.otp}</div>
                       </div>
 
@@ -893,33 +912,40 @@ export default function App() {
                         <strong>Dishes:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                       </div>
 
-                      {/* Admin Controls */}
+                      {/* Admin Gatekeeper Actions */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <button
-                          onClick={() => handleSetDeliverySlot(order.orderId)}
-                          style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#fc8019', color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
-                          🕒 {order.deliverySlot ? 'Edit Time Slot' : 'Assign Delivery Time'}
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Food is being prepared')}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Food is being prepared' ? '#282c3f' : '#f0f0f5', color: order.status === 'Food is being prepared' ? '#fff' : '#333', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                          🍳 Preparing Food
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Out for Delivery')}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Out for Delivery' ? '#282c3f' : '#f0f0f5', color: order.status === 'Out for Delivery' ? '#fff' : '#333', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                          🛵 Out for Delivery
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
-                          style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
-                          ✓ Mark Delivered & Clear
-                        </button>
-                        <button 
-                          onClick={() => handleRejectFakePayment(order.orderId)}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fff', color: '#dc2626', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                          ✕ Cancel (Fake/Unpaid)
-                        </button>
+                        {!order.paymentConfirmed ? (
+                          <>
+                            <button
+                              onClick={() => handleVerifyBankPaymentAndAccept(order.orderId)}
+                              style={{ padding: '8px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
+                              ✓ Confirm Bank Credit & Accept Order
+                            </button>
+                            <button 
+                              onClick={() => handleRejectUnpaidOrder(order.orderId)}
+                              style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fff', color: '#dc2626', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                              ✕ Reject & Delete (Unpaid/Cancelled)
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button 
+                              onClick={() => handleUpdateOrderStatus(order.orderId, 'Food is being prepared')}
+                              style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Food is being prepared' ? '#282c3f' : '#f0f0f5', color: order.status === 'Food is being prepared' ? '#fff' : '#333', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                              🍳 Preparing Food
+                            </button>
+                            <button 
+                              onClick={() => handleUpdateOrderStatus(order.orderId, 'Out for Delivery')}
+                              style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Out for Delivery' ? '#282c3f' : '#f0f0f5', color: order.status === 'Out for Delivery' ? '#fff' : '#333', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                              🛵 Out for Delivery
+                            </button>
+                            <button 
+                              onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
+                              style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
+                              ✓ Mark Delivered & Clear Data
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1079,12 +1105,12 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 20 }}>🍲</span>
-                <h3 style={{ margin: 0, fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Fast UPI Delivery Checkout</h3>
+                <h3 style={{ margin: 0, fontSize: 16, color: '#282c3f', fontWeight: 900 }}>Delivery & Payment</h3>
               </div>
               <button onClick={() => setOrderModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#7e808c' }}>✕</button>
             </div>
 
-            <form onSubmit={handleDirectPayAndOrder}>
+            <form onSubmit={handleInitiatePayment}>
               <div style={{ marginBottom: 10 }}>
                 <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Full Name</label>
                 <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '9px 11px', borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
@@ -1112,12 +1138,12 @@ export default function App() {
 
               <div style={{ backgroundColor: '#fff9f5', border: '1.5px solid #fed7aa', borderRadius: 10, padding: 14, marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, fontWeight: 900, color: '#c2410c' }}>TOTAL PAYABLE</span>
+                  <span style={{ fontSize: 12, fontWeight: 900, color: '#c2410c' }}>AMOUNT TO TRANSFER</span>
                   <span style={{ fontSize: 18, fontWeight: 900, color: '#fc8019' }}>₹{cartTotal}</span>
                 </div>
                 
                 <p style={{ margin: '6px 0 0 0', fontSize: 11, color: '#666', lineHeight: 1.4 }}>
-                  Tapping the button below opens your UPI App (GPay / PhonePe / Paytm) to transfer <strong>₹{cartTotal}</strong> to Admin ({ADMIN_PHONE}) and places your order automatically.
+                  Tapping below opens your UPI app to transfer <strong>₹{cartTotal}</strong> to Admin ({ADMIN_PHONE}). Your order will be placed into kitchen verification.
                 </p>
               </div>
 
@@ -1125,7 +1151,7 @@ export default function App() {
                 type="submit"
                 disabled={isSubmittingOrder}
                 style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 8, fontWeight: 900, fontSize: 15, cursor: isSubmittingOrder ? 'wait' : 'pointer', boxShadow: '0 4px 12px rgba(15,138,101,0.25)' }}>
-                {isSubmittingOrder ? 'Submitting Order...' : `⚡ Pay ₹${cartTotal} via UPI App & Confirm Order`}
+                {isSubmittingOrder ? 'Opening UPI App...' : `⚡ Open UPI App & Pay ₹${cartTotal}`}
               </button>
             </form>
           </div>
