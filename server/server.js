@@ -23,7 +23,7 @@ const MenuItemSchema = new mongoose.Schema({
   description: { type: String, default: '' },
   image: { type: String, default: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop&q=80' },
   auditStatus: { type: String, enum: ['pending_audit', 'approved', 'rejected'], default: 'pending_audit' },
-  adminFeedback: { type: String, default: 'Awaiting taste & hygiene quality inspection' },
+  adminFeedback: { type: String, default: 'Awaiting inspection' },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -40,7 +40,6 @@ const OrderSchema = new mongoose.Schema({
   deliverySlot: { type: String, default: '' },
   status: { 
     type: String, 
-    enum: ['Payment Verification Pending', 'Order Placed', 'Food is being prepared', 'Food Ready', 'Out for Delivery', 'Delivered', 'Cancelled'],
     default: 'Payment Verification Pending' 
   },
   otp: Number,
@@ -97,28 +96,27 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`✅ Admin verified bank credit for #${updatedOrder.orderId}! Slot: ${deliverySlot}`);
+    console.log(`✅ Order verified & approved in MongoDB: #${updatedOrder.orderId}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update order status or delete when delivered / removed
+// Permanent Reject / Delete / Status update
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
 
-    if (status === 'Delivered' || status === 'Delete') {
+    if (status === 'Delivered' || status === 'Delete' || status === 'Cancelled') {
       const purgedOrder = await Order.findOneAndDelete({ orderId: req.params.id });
-      if (!purgedOrder) return res.status(404).json({ error: 'Order not found' });
-      console.log(`🧹 Purged order #${purgedOrder.orderId} from database.`);
-      return res.json({ success: true, delivered: true, purged: true, orderId: purgedOrder.orderId });
+      console.log(`🗑️ Permanently removed order #${req.params.id} from MongoDB.`);
+      return res.json({ success: true, delivered: true, purged: true, orderId: req.params.id });
     }
 
     const updatedOrder = await Order.findOneAndUpdate(
       { orderId: req.params.id },
-      { $set: { status, paymentConfirmed: status !== 'Cancelled' } },
+      { $set: { status } },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
@@ -128,8 +126,10 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
+// Return all active orders (Always returns freshest data)
 app.get('/api/orders', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {

@@ -52,7 +52,7 @@ export default function App() {
     landmark: ''
   });
 
-  // Persistent tracking using LocalStorage
+  // Tracked order for live view
   const [trackedOrderId, setTrackedOrderId] = useState(() => {
     return localStorage.getItem('lasar_last_order_id') || null;
   });
@@ -118,21 +118,21 @@ export default function App() {
   };
 
   const fetchOrders = async () => {
-    const res = await safeFetchJson(`${API_BASE}/api/orders`);
+    const res = await safeFetchJson(`${API_BASE}/api/orders?t=` + Date.now());
     if (res.ok && Array.isArray(res.data)) {
       setOrders(res.data);
-      
-      // Auto-detect user's order by phone or stored ID
-      const userIdentifier = user?.phone;
-      const targetId = trackedOrderId;
-      
-      const found = res.data.find(o => 
-        (targetId && o.orderId === targetId) || 
-        (!isAdmin && userIdentifier && o.phone === userIdentifier)
-      );
 
+      const targetId = trackedOrderId;
+      const found = res.data.find(o => o.orderId === targetId);
       if (found) {
         setActiveCustomerOrder(found);
+      } else if (targetId && !found) {
+        // Order was purged by admin
+        setActiveCustomerOrder({
+          orderId: targetId,
+          status: 'Cancelled',
+          paymentConfirmed: false
+        });
       }
     }
   };
@@ -231,12 +231,13 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN APPROVES BANK CREDIT
+  // ADMIN CONFIRMS & ACCEPTS ORDER WITH TIME SLOT
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
+    // 1. Lock screen immediately
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
@@ -246,6 +247,7 @@ export default function App() {
 
     setSlotModalOrder(null);
 
+    // 2. Commit to MongoDB
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/verify-payment`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -255,10 +257,19 @@ export default function App() {
     fetchOrders();
   };
 
-  // ADMIN REJECTS FAKE/UNPAID ORDER
+  // ADMIN PERMANENT REJECT / CANCEL (Guaranteed Wipe)
   const handleRejectUnpaidOrder = async (orderId) => {
-    setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: 'Cancelled' } : o));
+    // 1. Instant local removal so it CANNOT revert
+    setOrders(prev => prev.filter(o => o.orderId !== orderId));
+    if (activeCustomerOrder?.orderId === orderId) {
+      setActiveCustomerOrder({
+        orderId,
+        status: 'Cancelled',
+        paymentConfirmed: false
+      });
+    }
 
+    // 2. Instruct backend to permanently delete from MongoDB
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -268,7 +279,7 @@ export default function App() {
     fetchOrders();
   };
 
-  // STATUS UPDATES
+  // STATUS STEPS (Food Ready, Out for Delivery, Delivered)
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     if (newStatus === 'Delivered' || newStatus === 'Delete') {
       setOrders(prev => prev.filter(o => o.orderId !== orderId));
@@ -400,7 +411,7 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER & LAUNCHES UPI
+  // USER SUBMITS ORDER -> PERSISTS TRACKER
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -672,7 +683,7 @@ export default function App() {
         {activeTab === 'customer' && (
           <div>
             {/* Real-time Order Tracking Box for Customer */}
-            {activeCustomerOrder ? (
+            {activeCustomerOrder && (
               <div style={{
                 backgroundColor: '#ffffff',
                 borderRadius: 16,
@@ -697,13 +708,13 @@ export default function App() {
                       textTransform: 'uppercase'
                     }}>
                       {activeCustomerOrder.status === 'Cancelled'
-                        ? '❌ ORDER CANCELLED / PAYMENT NOT FOUND'
+                        ? '❌ ORDER REJECTED (PAYMENT NOT RECEIVED)'
                         : activeCustomerOrder.status === 'Delivered'
                         ? '📦 ORDER DELIVERED'
                         : activeCustomerOrder.status === 'Out for Delivery'
                         ? '🛵 OUT FOR DELIVERY'
                         : activeCustomerOrder.status === 'Food Ready'
-                        ? '🍽️ FOOD IS READY'
+                        ? '🍽️ FOOD READY'
                         : activeCustomerOrder.paymentConfirmed
                         ? '👨‍🍳 ORDER ACCEPTED & PREPARING'
                         : '⏳ VERIFYING PAYMENT IN BANK...'}
@@ -746,7 +757,7 @@ export default function App() {
                     color: '#991b1b',
                     fontWeight: 700
                   }}>
-                    ⚠️ <strong>Payment was not received in our bank.</strong> Admin rejected this order. Please place a new order and ensure UPI payment is completed.
+                    ⚠️ <strong>Payment was not received in our bank.</strong> Admin rejected this order. Please place a new order and ensure UPI transfer is finished.
                   </div>
                 ) : !activeCustomerOrder.paymentConfirmed ? (
                   <div style={{
@@ -760,8 +771,8 @@ export default function App() {
                     fontWeight: 700,
                     lineHeight: 1.4
                   }}>
-                    🔍 <strong>Verifying Your Transfer...</strong><br/>
-                    Admin is checking bank records. Once verified, preparation will start and your delivery time slot will appear here.
+                    🔍 <strong>Verifying Your Bank Transfer...</strong><br/>
+                    Admin is cross-checking incoming funds. As soon as money reflects, your order will be approved and preparation will begin.
                   </div>
                 ) : (
                   <div style={{
@@ -802,7 +813,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ) : null}
+            )}
 
             {/* Search and Veg Toggle Filter */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
@@ -911,25 +922,25 @@ export default function App() {
 
               {orders.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '24px 0', color: '#7e808c', fontSize: 13 }}>
-                  🎉 No orders currently.
+                  🎉 No incoming orders right now.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   {orders.map(order => (
-                    <div key={order.orderId} style={{ border: `1.5px solid ${order.status === 'Cancelled' ? '#fecaca' : order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
+                    <div key={order.orderId} style={{ border: `1.5px solid ${order.paymentConfirmed ? '#bbf7d0' : '#fed7aa'}`, borderRadius: 10, padding: 14, backgroundColor: '#ffffff' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f0f0f5', paddingBottom: 8, marginBottom: 8 }}>
                         <div>
                           <span style={{ fontSize: 13, fontWeight: 900, color: '#282c3f' }}>#{order.orderId}</span>
                           <span style={{
                             marginLeft: 8,
                             fontSize: 10,
-                            backgroundColor: order.status === 'Cancelled' ? '#fef2f2' : order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
-                            color: order.status === 'Cancelled' ? '#e43b4f' : order.paymentConfirmed ? '#0f8a65' : '#b45309',
+                            backgroundColor: order.paymentConfirmed ? '#eaf8f2' : '#fffbeb',
+                            color: order.paymentConfirmed ? '#0f8a65' : '#b45309',
                             padding: '3px 8px',
                             borderRadius: 6,
                             fontWeight: 900
                           }}>
-                            {order.status === 'Cancelled' ? '❌ CANCELLED' : order.paymentConfirmed ? `✓ ${order.status.toUpperCase()}` : '⚠️ AWAITING BANK CREDIT'}
+                            {order.paymentConfirmed ? `✓ ${order.status.toUpperCase()}` : '⚠️ AWAITING BANK CREDIT'}
                           </span>
                         </div>
                         <div style={{ fontSize: 15, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
@@ -954,13 +965,7 @@ export default function App() {
 
                       {/* State-specific button rendering */}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {order.status === 'Cancelled' ? (
-                          <button 
-                            onClick={() => handleUpdateOrderStatus(order.orderId, 'Delete')}
-                            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fee2e2', color: '#b91c1c', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                            🗑️ Delete Record Permanently
-                          </button>
-                        ) : !order.paymentConfirmed ? (
+                        {!order.paymentConfirmed ? (
                           <>
                             <button
                               onClick={() => { setSlotModalOrder(order); setCustomSlotInput('30-40 mins'); }}
