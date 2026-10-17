@@ -53,6 +53,15 @@ export default function App() {
     landmark: ''
   });
 
+  // Local storage blacklist for dismissed orders so polling NEVER resurrects them
+  const [dismissedOrderIds, setDismissedOrderIds] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('lasar_admin_dismissed_orders') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
   const [apiConnected, setApiConnected] = useState(false);
 
   // Time Slot Selection Modal
@@ -117,7 +126,9 @@ export default function App() {
     if (isAdmin) {
       const res = await safeFetchJson(`${API_BASE}/api/orders?nocache=` + Date.now());
       if (res.ok && Array.isArray(res.data)) {
-        setOrders(res.data);
+        // Filter out any order IDs stored in local dismissed list
+        const activeOnly = res.data.filter(o => !dismissedOrderIds.includes(o.orderId));
+        setOrders(activeOnly);
       }
     }
 
@@ -141,7 +152,7 @@ export default function App() {
       }, 3000);
       return () => clearInterval(interval);
     }
-  }, [user, isAdmin]);
+  }, [user, isAdmin, dismissedOrderIds]);
 
   // Auth Handlers
   const handleRequestAuth = async (e) => {
@@ -151,7 +162,7 @@ export default function App() {
     let identifier = '';
     if (loginMethod === 'mobile') {
       const cleaned = loginPhone.trim().replace(/\D/g, '');
-      if (cleaned.length !== 10) return alert('Please enter a valid 10-digit mobile number');
+      if (cleaned.length !== 10) return alert('Please enter a 10-digit mobile number');
       identifier = cleaned;
     } else {
       const cleaned = loginEmail.trim().toLowerCase();
@@ -280,25 +291,36 @@ export default function App() {
     fetchOrders();
   };
 
-  // DISMISS SINGLE ORDER FROM ADMIN VIEW
+  // DISMISS SINGLE ORDER PERMANENTLY (Updates LocalStorage blacklist + MongoDB delete)
   const handleDeleteOrderPermanently = async (orderId) => {
+    const updated = [...dismissedOrderIds, orderId];
+    setDismissedOrderIds(updated);
+    localStorage.setItem('lasar_admin_dismissed_orders', JSON.stringify(updated));
+
     setOrders(prev => prev.filter(o => o.orderId !== orderId));
+
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}`, {
       method: 'DELETE'
     });
-    fetchOrders();
   };
 
-  // GUARANTEED ONE-TAP BULK CLEAR FOR ADMIN
+  // GUARANTEED ONE-TAP BULK CLEAR (Updates LocalStorage blacklist + MongoDB delete)
   const handleClearAllRejected = async () => {
-    setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
+    const rejectedNow = orders.filter(o => o.status === 'Rejected' || o.status === 'Cancelled').map(o => o.orderId);
+    const updated = Array.from(new Set([...dismissedOrderIds, ...rejectedNow]));
     
+    // Save to device storage immediately so polling cannot overwrite
+    setDismissedOrderIds(updated);
+    localStorage.setItem('lasar_admin_dismissed_orders', JSON.stringify(updated));
+
+    // Clear local screen state
+    setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
+
+    // Execute purge on MongoDB
     await safeFetchJson(`${API_BASE}/api/orders/clear-all-rejected`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
-
-    fetchOrders();
   };
 
   const handleAuditDecision = async (dishId, decision) => {
@@ -691,7 +713,7 @@ export default function App() {
       {/* Main Content Area */}
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
-        {/* VIEW A: CUSTOMER ORDER HISTORY (PERSISTENT LOG) */}
+        {/* VIEW A: CUSTOMER ORDER HISTORY */}
         {!isAdmin && activeTab === 'history' && (
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -783,7 +805,6 @@ export default function App() {
         {/* VIEW B: CUSTOMER MENU & LATEST ORDER LIVE TRACKER */}
         {activeTab === 'customer' && (
           <div>
-            {/* Live Latest Order Status Box (GATED STRICTLY BEHIND ADMIN CONFIRMATION) */}
             {latestUserOrder && latestUserOrder.status !== 'Delivered' && (
               <div style={{
                 backgroundColor: '#ffffff',
@@ -1068,7 +1089,7 @@ export default function App() {
                         <button 
                           onClick={() => handleUpdateOrderStatus(order.orderId, 'Out for Delivery')}
                           style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: order.status === 'Out for Delivery' ? '#282c3f' : '#f0f0f5', color: order.status === 'Out for Delivery' ? '#fff' : '#333', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                              🛵 Out for Delivery
+                          🛵 Out for Delivery
                         </button>
                         <button 
                           onClick={() => handleUpdateOrderStatus(order.orderId, 'Delivered')}
@@ -1082,7 +1103,7 @@ export default function App() {
               )}
             </div>
 
-            {/* 3. REJECTED ORDERS SECTION WITH "CLEAR ALL" BUTTON */}
+            {/* 3. REJECTED ORDERS SECTION (PERMANENT DELETE VIA LOCAL STORAGE + DB PURGE) */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #ef4444' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>

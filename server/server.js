@@ -40,7 +40,6 @@ const OrderSchema = new mongoose.Schema({
   deliverySlot: { type: String, default: '' },
   status: { type: String, default: 'Pending Verification' },
   cancellationReason: { type: String, default: '' },
-  dismissedByAdmin: { type: Boolean, default: false }, // Allows clearing from admin while preserving user history
   otp: Number,
   createdAt: { type: Date, default: Date.now }
 });
@@ -60,7 +59,7 @@ const findOrder = (idParam) => {
   return { orderId: idParam };
 };
 
-// 1. Create Order (Enters strictly as UNVERIFIED PENDING)
+// 1. Create Order
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -152,35 +151,42 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// 5. Dismiss/Delete single order from Admin view
+// 5. Delete Single Order Permanently from MongoDB
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = findOrder(req.params.id);
-    await Order.updateMany(query, { $set: { dismissedByAdmin: true } });
-    res.json({ success: true });
+    const result = await Order.deleteMany(query);
+    console.log(`🗑️ Deleted single order: ${req.params.id} (Count: ${result.deletedCount})`);
+    res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 6. CLEAR ALL REJECTED ORDERS FROM ADMIN VIEW
-app.post('/api/orders/clear-all-rejected', async (req, res) => {
+// 6. CLEAR ALL REJECTED ORDERS PERMANENTLY FROM MONGODB
+const handleClearAllRejectedDB = async (req, res) => {
   try {
-    const result = await Order.updateMany(
-      { status: { $in: ['Rejected', 'Cancelled'] } },
-      { $set: { dismissedByAdmin: true } }
-    );
-    console.log(`🧹 Cleared rejected orders from Admin view (Updated: ${result.modifiedCount})`);
-    res.json({ success: true, modifiedCount: result.modifiedCount });
+    const result = await Order.deleteMany({
+      $or: [
+        { status: 'Rejected' },
+        { status: 'Cancelled' },
+        { cancellationReason: { $ne: '' } }
+      ]
+    });
+    console.log(`🧹 Permanently deleted all rejected orders from MongoDB (Count: ${result.deletedCount})`);
+    res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+};
 
-// 7. Get Customer Orders by Phone (User keeps full history including rejected)
+app.post('/api/orders/clear-all-rejected', handleClearAllRejectedDB);
+app.delete('/api/orders/clear-all-rejected', handleClearAllRejectedDB);
+
+// 7. Get Customer Orders by Phone
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
-    res.set({ 'Cache-Control': 'no-store, no-cache' });
+    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' });
     const userOrders = await Order.find({ phone: req.params.phone }).sort({ createdAt: -1 });
     res.json(userOrders);
   } catch (err) {
@@ -188,11 +194,11 @@ app.get('/api/orders/user/:phone', async (req, res) => {
   }
 });
 
-// 8. Get All Active Orders for Admin (Excludes dismissed orders)
+// 8. Get All Active Orders for Admin
 app.get('/api/orders', async (req, res) => {
   try {
-    res.set({ 'Cache-Control': 'no-store, no-cache' });
-    const orders = await Order.find({ dismissedByAdmin: { $ne: true } }).sort({ createdAt: -1 });
+    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' });
+    const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
