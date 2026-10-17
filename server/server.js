@@ -38,7 +38,7 @@ const OrderSchema = new mongoose.Schema({
   totalAmount: Number,
   paymentConfirmed: { type: Boolean, default: false },
   deliverySlot: { type: String, default: '' },
-  status: { type: String, default: 'Payment Verification Pending' },
+  status: { type: String, default: 'Pending Verification' },
   cancellationReason: { type: String, default: '' },
   otp: Number,
   createdAt: { type: Date, default: Date.now }
@@ -51,7 +51,7 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Helper for finding order
+// Helper for finding order by orderId or _id
 const findOrder = (idParam) => {
   if (mongoose.Types.ObjectId.isValid(idParam)) {
     return { $or: [{ orderId: idParam }, { _id: idParam }] };
@@ -59,7 +59,7 @@ const findOrder = (idParam) => {
   return { orderId: idParam };
 };
 
-// 1. Create Order
+// 1. Create Order (Enters strictly as UNVERIFIED PENDING)
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -75,19 +75,19 @@ app.post('/api/orders', async (req, res) => {
       totalAmount,
       paymentConfirmed: false,
       deliverySlot: '',
-      status: 'Payment Verification Pending',
+      status: 'Pending Verification',
       otp: Math.floor(1000 + Math.random() * 9000)
     });
     await order.save();
-    console.log(`⏳ Awaiting Bank Verification: #${order.orderId} from ${phone}`);
+    console.log(`⏳ Unverified Order Placed: #${order.orderId} from ${phone}`);
     res.status(201).json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2. Admin Approves Order with Delivery Time Slot
-app.patch('/api/orders/:id/verify-payment', async (req, res) => {
+// 2. Admin Confirms Payment & Accepts Order
+app.patch('/api/orders/:id/approve', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
     const query = findOrder(req.params.id);
@@ -96,14 +96,14 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
       { 
         $set: { 
           paymentConfirmed: true, 
-          status: 'Food is being prepared',
+          status: 'Confirmed & Preparing',
           deliverySlot: deliverySlot || '30-40 mins'
         } 
       },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`✅ Approved Order #${updatedOrder.orderId}`);
+    console.log(`✅ Admin Approved Order #${updatedOrder.orderId}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -111,7 +111,7 @@ app.patch('/api/orders/:id/verify-payment', async (req, res) => {
 });
 
 // 3. Admin Rejects Fake / Unpaid Order
-app.patch('/api/orders/:id/reject-order', async (req, res) => {
+app.patch('/api/orders/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
     const query = findOrder(req.params.id);
@@ -120,21 +120,21 @@ app.patch('/api/orders/:id/reject-order', async (req, res) => {
       { 
         $set: { 
           paymentConfirmed: false, 
-          status: 'Cancelled',
+          status: 'Rejected',
           cancellationReason: reason || 'Payment was not credited to bank account'
         } 
       },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`❌ Cancelled Order #${updatedOrder.orderId}`);
+    console.log(`❌ Admin Rejected Order #${updatedOrder.orderId}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 4. Update Status (Preparing, Out for Delivery, Delivered)
+// 4. Update Kitchen Status (Out for Delivery, Delivered)
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -151,7 +151,7 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// 5. Permanent Delete
+// 5. Delete Single Order
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = findOrder(req.params.id);
@@ -162,7 +162,18 @@ app.delete('/api/orders/:id', async (req, res) => {
   }
 });
 
-// 6. Get orders for customer history by phone
+// 6. Bulk Delete ALL Rejected / Cancelled Orders
+app.delete('/api/orders-clear-rejected', async (req, res) => {
+  try {
+    const result = await Order.deleteMany({ status: { $in: ['Rejected', 'Cancelled'] } });
+    console.log(`🧹 Cleared all rejected orders (Count: ${result.deletedCount})`);
+    res.json({ success: true, deletedCount: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Get Customer Orders by Phone
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
     res.set({ 'Cache-Control': 'no-store, no-cache' });
@@ -173,7 +184,7 @@ app.get('/api/orders/user/:phone', async (req, res) => {
   }
 });
 
-// 7. Get orders for Admin Orders Received / Kitchen
+// 8. Get All Orders for Admin
 app.get('/api/orders', async (req, res) => {
   try {
     res.set({ 'Cache-Control': 'no-store, no-cache' });
@@ -265,4 +276,4 @@ app.delete('/api/admin/dish/:id', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 LASAR Full-Stack API listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 LASAR API running on port ${PORT}`));
