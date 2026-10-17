@@ -53,15 +53,6 @@ export default function App() {
     landmark: ''
   });
 
-  // Local storage blacklist for dismissed orders so polling NEVER resurrects them
-  const [dismissedOrderIds, setDismissedOrderIds] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('lasar_admin_dismissed_orders') || '[]');
-    } catch {
-      return [];
-    }
-  });
-
   const [apiConnected, setApiConnected] = useState(false);
 
   // Time Slot Selection Modal
@@ -82,6 +73,7 @@ export default function App() {
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   const isAdmin = user && user.isAdmin;
 
+  // Auto fill form with user phone & name
   useEffect(() => {
     if (user) {
       setCustomerForm(prev => ({
@@ -122,18 +114,19 @@ export default function App() {
     if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
+  // Sync orders for Admin and User History
   const fetchOrders = async () => {
     if (isAdmin) {
       const res = await safeFetchJson(`${API_BASE}/api/orders?nocache=` + Date.now());
       if (res.ok && Array.isArray(res.data)) {
-        // Filter out any order IDs stored in local dismissed list
-        const activeOnly = res.data.filter(o => !dismissedOrderIds.includes(o.orderId));
-        setOrders(activeOnly);
+        setOrders(res.data);
       }
     }
 
-    if (user && user.phone) {
-      const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${user.phone}?nocache=` + Date.now());
+    const currentPhone = user?.phone || customerForm.phone;
+    if (currentPhone) {
+      const cleanPhone = String(currentPhone).trim().replace(/\D/g, '');
+      const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${cleanPhone}?nocache=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
         setUserHistory(userRes.data);
       }
@@ -152,7 +145,7 @@ export default function App() {
       }, 3000);
       return () => clearInterval(interval);
     }
-  }, [user, isAdmin, dismissedOrderIds]);
+  }, [user, isAdmin]);
 
   // Auth Handlers
   const handleRequestAuth = async (e) => {
@@ -162,7 +155,7 @@ export default function App() {
     let identifier = '';
     if (loginMethod === 'mobile') {
       const cleaned = loginPhone.trim().replace(/\D/g, '');
-      if (cleaned.length !== 10) return alert('Please enter a 10-digit mobile number');
+      if (cleaned.length !== 10) return alert('Please enter a valid 10-digit mobile number');
       identifier = cleaned;
     } else {
       const cleaned = loginEmail.trim().toLowerCase();
@@ -272,7 +265,7 @@ export default function App() {
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: 'Payment was not credited to Admin bank account' })
+      body: JSON.stringify({ reason: 'Payment was not received in Admin bank account' })
     });
 
     fetchOrders();
@@ -291,36 +284,22 @@ export default function App() {
     fetchOrders();
   };
 
-  // DISMISS SINGLE ORDER PERMANENTLY (Updates LocalStorage blacklist + MongoDB delete)
-  const handleDeleteOrderPermanently = async (orderId) => {
-    const updated = [...dismissedOrderIds, orderId];
-    setDismissedOrderIds(updated);
-    localStorage.setItem('lasar_admin_dismissed_orders', JSON.stringify(updated));
-
-    setOrders(prev => prev.filter(o => o.orderId !== orderId));
-
-    await safeFetchJson(`${API_BASE}/api/orders/${orderId}`, {
-      method: 'DELETE'
+  // USER DELETES AN ORDER FROM THEIR OWN HISTORY
+  const handleUserDeleteOrder = async (orderId) => {
+    setUserHistory(prev => prev.filter(o => o.orderId !== orderId));
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/user-delete`, {
+      method: 'PATCH'
     });
+    fetchOrders();
   };
 
-  // GUARANTEED ONE-TAP BULK CLEAR (Updates LocalStorage blacklist + MongoDB delete)
+  // ADMIN CLEARS ALL REJECTED ORDERS FROM THE DATABASE
   const handleClearAllRejected = async () => {
-    const rejectedNow = orders.filter(o => o.status === 'Rejected' || o.status === 'Cancelled').map(o => o.orderId);
-    const updated = Array.from(new Set([...dismissedOrderIds, ...rejectedNow]));
-    
-    // Save to device storage immediately so polling cannot overwrite
-    setDismissedOrderIds(updated);
-    localStorage.setItem('lasar_admin_dismissed_orders', JSON.stringify(updated));
-
-    // Clear local screen state
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
-
-    // Execute purge on MongoDB
     await safeFetchJson(`${API_BASE}/api/orders/clear-all-rejected`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      method: 'POST'
     });
+    fetchOrders();
   };
 
   const handleAuditDecision = async (dishId, decision) => {
@@ -434,13 +413,13 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER
+  // USER SUBMITS ORDER (AWAIT CONFIRMATION BEFORE LAUNCHING UPI)
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
 
     const cleanedPhone = customerForm.phone.trim().replace(/\D/g, '');
-    if (cleanedPhone.length !== 10) return alert('Mobile number must be 10 digits.');
+    if (cleanedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
     if (!customerForm.deliveryArea.trim()) return alert('Please enter delivery area.');
     if (!customerForm.address.trim()) return alert('Please enter complete delivery address.');
     if (!customerForm.landmark.trim()) return alert('Please enter nearest landmark.');
@@ -467,12 +446,17 @@ export default function App() {
       const createdOrder = orderRes.data.order;
       setCart([]);
       setOrderModalOpen(false);
+
+      // Instantly update user history on screen
+      setUserHistory(prev => [createdOrder, ...prev]);
+      setActiveTab('history'); // Directly takes customer to their My Orders view!
       fetchOrders();
 
+      // Launch UPI
       const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
       window.location.href = upiUrl;
     } else {
-      alert('Could not submit order. Please check network.');
+      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server is waking up, please tap again in 5 seconds.'));
     }
   };
 
@@ -713,13 +697,15 @@ export default function App() {
       {/* Main Content Area */}
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
-        {/* VIEW A: CUSTOMER ORDER HISTORY */}
+        {/* ======================================================== */}
+        {/* VIEW A: CUSTOMER ORDER HISTORY (PERSISTENT LOG) */}
+        {/* ======================================================== */}
         {!isAdmin && activeTab === 'history' && (
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Your Orders History</h2>
-                <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#7e808c' }}>Orders placed under: <strong>{user.phone}</strong></p>
+                <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#7e808c' }}>Orders placed under: <strong>{user.phone || customerForm.phone}</strong></p>
               </div>
               <button onClick={fetchOrders} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #ccc', backgroundColor: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
                 🔄 Refresh
@@ -729,8 +715,8 @@ export default function App() {
             {userHistory.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 0', color: '#7e808c' }}>
                 <div style={{ fontSize: 36, marginBottom: 8 }}>📜</div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: '#282c3f' }}>No Orders Found</div>
-                <p style={{ fontSize: 12, marginTop: 4 }}>Place an order from the menu to track it here.</p>
+                <div style={{ fontSize: 15, fontWeight: 800, color: '#282c3f' }}>No Orders Found Yet</div>
+                <p style={{ fontSize: 12, marginTop: 4 }}>Place an order from the menu to track it here live.</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -766,7 +752,7 @@ export default function App() {
                           {order.status === 'Rejected' || order.status === 'Cancelled' ? '❌ REJECTED (PAYMENT NOT RECEIVED)' :
                            order.status === 'Delivered' ? '📦 DELIVERED' :
                            order.status === 'Out for Delivery' ? '🛵 OUT FOR DELIVERY' :
-                           order.paymentConfirmed ? '👨‍🍳 CONFIRMED & COOKING' : '⚠️ UNVERIFIED REQUEST'}
+                           order.paymentConfirmed ? '👨‍🍳 CONFIRMED & COOKING' : '⚠️ PENDING ADMIN APPROVAL'}
                         </span>
                       </div>
                       <div style={{ fontSize: 16, fontWeight: 900, color: '#fc8019' }}>₹{order.totalAmount}</div>
@@ -792,8 +778,19 @@ export default function App() {
                       )}
                     </div>
 
-                    <div style={{ fontSize: 12, color: '#64748b' }}>
-                      <strong>Items:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>
+                        <strong>Items:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
+                      </div>
+
+                      {/* Customer can delete old/cancelled orders if they want to */}
+                      {(order.status === 'Rejected' || order.status === 'Cancelled' || order.status === 'Delivered') && (
+                        <button
+                          onClick={() => handleUserDeleteOrder(order.orderId)}
+                          style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#64748b', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                          🗑️ Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -805,6 +802,7 @@ export default function App() {
         {/* VIEW B: CUSTOMER MENU & LATEST ORDER LIVE TRACKER */}
         {activeTab === 'customer' && (
           <div>
+            {/* Live Latest Order Status Box (GATED STRICTLY BEHIND ADMIN CONFIRMATION) */}
             {latestUserOrder && latestUserOrder.status !== 'Delivered' && (
               <div style={{
                 backgroundColor: '#ffffff',
@@ -1103,7 +1101,7 @@ export default function App() {
               )}
             </div>
 
-            {/* 3. REJECTED ORDERS SECTION (PERMANENT DELETE VIA LOCAL STORAGE + DB PURGE) */}
+            {/* 3. REJECTED ORDERS SECTION */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #ef4444' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
@@ -1131,11 +1129,6 @@ export default function App() {
                         <strong>#{order.orderId}</strong> — {order.customerName} ({order.phone}) • ₹{order.totalAmount}
                         <div style={{ fontSize: 10, color: '#7f1d1d', marginTop: 2 }}>❌ Rejected: Payment not received</div>
                       </div>
-                      <button
-                        onClick={() => handleDeleteOrderPermanently(order.orderId)}
-                        style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #f87171', backgroundColor: '#fff', color: '#b91c1c', fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>
-                        Delete
-                      </button>
                     </div>
                   ))}
                 </div>

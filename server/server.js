@@ -30,7 +30,7 @@ const MenuItemSchema = new mongoose.Schema({
 const OrderSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
   customerName: { type: String, required: true },
-  phone: { type: String, required: true },
+  phone: { type: String, required: true, index: true },
   deliveryArea: { type: String, default: 'Area not specified' },
   address: { type: String, required: true },
   landmark: { type: String, default: '' },
@@ -40,6 +40,7 @@ const OrderSchema = new mongoose.Schema({
   deliverySlot: { type: String, default: '' },
   status: { type: String, default: 'Pending Verification' },
   cancellationReason: { type: String, default: '' },
+  userDeleted: { type: Boolean, default: false }, // User can delete from their own history
   otp: Number,
   createdAt: { type: Date, default: Date.now }
 });
@@ -59,17 +60,18 @@ const findOrder = (idParam) => {
   return { orderId: idParam };
 };
 
-// 1. Create Order
+// 1. Create Order (Guaranteed Sync)
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
+    const cleanPhone = String(phone).trim().replace(/\D/g, '');
 
     const order = new Order({
       orderId: 'LSR-' + Math.floor(100000 + Math.random() * 900000),
-      customerName,
-      phone,
+      customerName: customerName.trim(),
+      phone: cleanPhone,
       deliveryArea: deliveryArea || 'Area not specified',
-      address,
+      address: address.trim(),
       landmark: landmark || '',
       items,
       totalAmount,
@@ -78,10 +80,12 @@ app.post('/api/orders', async (req, res) => {
       status: 'Pending Verification',
       otp: Math.floor(1000 + Math.random() * 9000)
     });
-    await order.save();
-    console.log(`⏳ Unverified Order Placed: #${order.orderId} from ${phone}`);
-    res.status(201).json({ success: true, order });
+
+    const saved = await order.save();
+    console.log(`✅ Order SAVED successfully in MongoDB: #${saved.orderId} for phone: ${saved.phone}`);
+    res.status(201).json({ success: true, order: saved });
   } catch (err) {
+    console.error('❌ Error saving order:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -151,53 +155,59 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   }
 });
 
-// 5. Delete Single Order Permanently from MongoDB
+// 5. User Soft-Deletes Order from their Personal History
+app.patch('/api/orders/:id/user-delete', async (req, res) => {
+  try {
+    const query = findOrder(req.params.id);
+    await Order.findOneAndUpdate(query, { $set: { userDeleted: true } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Delete Order Permanently
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = findOrder(req.params.id);
-    const result = await Order.deleteMany(query);
-    console.log(`🗑️ Deleted single order: ${req.params.id} (Count: ${result.deletedCount})`);
+    await Order.deleteMany(query);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Clear All Rejected Orders
+app.post('/api/orders/clear-all-rejected', async (req, res) => {
+  try {
+    const result = await Order.deleteMany({
+      $or: [{ status: 'Rejected' }, { status: 'Cancelled' }]
+    });
     res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 6. CLEAR ALL REJECTED ORDERS PERMANENTLY FROM MONGODB
-const handleClearAllRejectedDB = async (req, res) => {
-  try {
-    const result = await Order.deleteMany({
-      $or: [
-        { status: 'Rejected' },
-        { status: 'Cancelled' },
-        { cancellationReason: { $ne: '' } }
-      ]
-    });
-    console.log(`🧹 Permanently deleted all rejected orders from MongoDB (Count: ${result.deletedCount})`);
-    res.json({ success: true, deletedCount: result.deletedCount });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-app.post('/api/orders/clear-all-rejected', handleClearAllRejectedDB);
-app.delete('/api/orders/clear-all-rejected', handleClearAllRejectedDB);
-
-// 7. Get Customer Orders by Phone
+// 8. Get Customer Orders by Phone (Robust matching + userDeleted filter)
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
-    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' });
-    const userOrders = await Order.find({ phone: req.params.phone }).sort({ createdAt: -1 });
+    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate' });
+    const cleanPhone = String(req.params.phone).trim().replace(/\D/g, '');
+    const userOrders = await Order.find({ 
+      phone: cleanPhone,
+      userDeleted: { $ne: true }
+    }).sort({ createdAt: -1 });
     res.json(userOrders);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 8. Get All Active Orders for Admin
+// 9. Get All Active Orders for Admin
 app.get('/api/orders', async (req, res) => {
   try {
-    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' });
+    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate' });
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
