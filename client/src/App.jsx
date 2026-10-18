@@ -36,7 +36,25 @@ export default function App() {
   const [menu, setMenu] = useState([]);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [userHistory, setUserHistory] = useState([]);
+
+  // Load persistent orders directly by logged in phone number from device storage
+  const [userHistory, setUserHistory] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('lasar_user');
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        const phone = (parsed.phone || parsed.identifier || '').replace(/\D/g, '');
+        if (phone) {
+          const stored = localStorage.getItem(`lasar_phone_history_${phone}`);
+          return stored ? JSON.parse(stored) : [];
+        }
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+
   const [auditQueue, setAuditQueue] = useState({ pendingDishes: [], approvedDishes: [], rejectedDishes: [] });
   const [searchQuery, setSearchQuery] = useState('');
   const [filterVegOnly, setFilterVegOnly] = useState(false);
@@ -73,20 +91,47 @@ export default function App() {
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   const isAdmin = user && user.isAdmin;
 
-  // Auto fill form with user phone & name
+  // Keep phone history synced in local storage
+  const saveUserOrdersLocally = (phone, ordersList) => {
+    if (!phone) return;
+    const clean = String(phone).replace(/\D/g, '');
+    try {
+      localStorage.setItem(`lasar_phone_history_${clean}`, JSON.stringify(ordersList));
+    } catch {
+      // ignore quota
+    }
+  };
+
   useEffect(() => {
     if (user) {
+      const userPhone = (user.phone || user.identifier || '').replace(/\D/g, '');
       setCustomerForm(prev => ({
         ...prev,
         name: user.name || prev.name,
-        phone: user.phone || prev.phone
+        phone: userPhone || prev.phone
       }));
+
+      // Immediately restore this phone's stored history
+      if (userPhone) {
+        try {
+          const localSaved = localStorage.getItem(`lasar_phone_history_${userPhone}`);
+          if (localSaved) {
+            setUserHistory(JSON.parse(localSaved));
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
   }, [user]);
 
   const safeFetchJson = async (url, options = {}) => {
     try {
-      const res = await fetch(url, options);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 second graceful timeout
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+
       const text = await res.text();
       try {
         return { ok: res.ok, status: res.status, data: JSON.parse(text) };
@@ -114,21 +159,21 @@ export default function App() {
     if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
-  // Sync orders for Admin and User History
+  // Sync orders for Admin and Phone History
   const fetchOrders = async () => {
     if (isAdmin) {
-      const res = await safeFetchJson(`${API_BASE}/api/orders?nocache=` + Date.now());
+      const res = await safeFetchJson(`${API_BASE}/api/orders?ts=` + Date.now());
       if (res.ok && Array.isArray(res.data)) {
         setOrders(res.data);
       }
     }
 
-    const currentPhone = user?.phone || customerForm.phone;
+    const currentPhone = (user?.phone || user?.identifier || customerForm.phone || '').replace(/\D/g, '');
     if (currentPhone) {
-      const cleanPhone = String(currentPhone).trim().replace(/\D/g, '');
-      const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${cleanPhone}?nocache=` + Date.now());
+      const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${currentPhone}?ts=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
         setUserHistory(userRes.data);
+        saveUserOrdersLocally(currentPhone, userRes.data);
       }
     }
   };
@@ -141,8 +186,9 @@ export default function App() {
       if (isAdmin) fetchAuditData();
 
       const interval = setInterval(() => {
+        checkHealth();
         fetchOrders();
-      }, 3000);
+      }, 3500);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin]);
@@ -155,7 +201,7 @@ export default function App() {
     let identifier = '';
     if (loginMethod === 'mobile') {
       const cleaned = loginPhone.trim().replace(/\D/g, '');
-      if (cleaned.length !== 10) return alert('Please enter a valid 10-digit mobile number');
+      if (cleaned.length !== 10) return alert('Please enter a 10-digit mobile number');
       identifier = cleaned;
     } else {
       const cleaned = loginEmail.trim().toLowerCase();
@@ -203,15 +249,29 @@ export default function App() {
       if (enteredCode.trim() !== generatedOtp) {
         return alert('Incorrect verification code. Please check on-screen OTP.');
       }
+      const cleanPhone = cleanIdentifier.length === 10 && !isNaN(cleanIdentifier) ? cleanIdentifier : '';
       const regularUser = {
         name: loginName.trim(),
         identifier: cleanIdentifier,
-        phone: cleanIdentifier.length === 10 && !isNaN(cleanIdentifier) ? cleanIdentifier : '',
+        phone: cleanPhone,
         email: cleanIdentifier.includes('@') ? cleanIdentifier : '',
         isAdmin: false
       };
       setUser(regularUser);
       localStorage.setItem('lasar_user', JSON.stringify(regularUser));
+
+      // Instantly load this phone's cached history
+      if (cleanPhone) {
+        try {
+          const cached = localStorage.getItem(`lasar_phone_history_${cleanPhone}`);
+          if (cached) {
+            setUserHistory(JSON.parse(cached));
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       setAuthStep(false);
       setEnteredCode('');
       setActiveTab('customer');
@@ -222,14 +282,13 @@ export default function App() {
     localStorage.removeItem('lasar_user');
     setUser(null);
     setCart([]);
-    setUserHistory([]);
     setActiveTab('customer');
     setAuthStep(false);
     setEnteredCode('');
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN APPROVES ORDER AND SETS TIME
+  // ADMIN APPROVES ORDER AND SETS DELIVERY TIME
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
@@ -265,7 +324,7 @@ export default function App() {
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: 'Payment was not received in Admin bank account' })
+      body: JSON.stringify({ reason: 'Payment was not credited to Admin bank account' })
     });
 
     fetchOrders();
@@ -284,20 +343,12 @@ export default function App() {
     fetchOrders();
   };
 
-  // USER DELETES AN ORDER FROM THEIR OWN HISTORY
-  const handleUserDeleteOrder = async (orderId) => {
-    setUserHistory(prev => prev.filter(o => o.orderId !== orderId));
-    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/user-delete`, {
-      method: 'PATCH'
-    });
-    fetchOrders();
-  };
-
-  // ADMIN CLEARS ALL REJECTED ORDERS FROM THE DATABASE
+  // CLEAR ALL REJECTED ORDERS FROM MONGODB & VIEW
   const handleClearAllRejected = async () => {
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
     await safeFetchJson(`${API_BASE}/api/orders/clear-all-rejected`, {
-      method: 'POST'
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
     });
     fetchOrders();
   };
@@ -413,7 +464,7 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER (AWAIT CONFIRMATION BEFORE LAUNCHING UPI)
+  // USER SUBMITS ORDER (Waits for database to save before redirecting to UPI)
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -447,9 +498,13 @@ export default function App() {
       setCart([]);
       setOrderModalOpen(false);
 
-      // Instantly update user history on screen
-      setUserHistory(prev => [createdOrder, ...prev]);
-      setActiveTab('history'); // Directly takes customer to their My Orders view!
+      // Save immediately to local device cache for this phone
+      const updatedHistory = [createdOrder, ...userHistory.filter(o => o.orderId !== createdOrder.orderId)];
+      setUserHistory(updatedHistory);
+      saveUserOrdersLocally(cleanedPhone, updatedHistory);
+
+      // Switch to history view so customer sees their pending status immediately
+      setActiveTab('history');
       fetchOrders();
 
       // Launch UPI
@@ -697,9 +752,7 @@ export default function App() {
       {/* Main Content Area */}
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
-        {/* ======================================================== */}
         {/* VIEW A: CUSTOMER ORDER HISTORY (PERSISTENT LOG) */}
-        {/* ======================================================== */}
         {!isAdmin && activeTab === 'history' && (
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -778,19 +831,8 @@ export default function App() {
                       )}
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-                      <div style={{ fontSize: 12, color: '#64748b' }}>
-                        <strong>Items:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
-                      </div>
-
-                      {/* Customer can delete old/cancelled orders if they want to */}
-                      {(order.status === 'Rejected' || order.status === 'Cancelled' || order.status === 'Delivered') && (
-                        <button
-                          onClick={() => handleUserDeleteOrder(order.orderId)}
-                          style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#64748b', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
-                          🗑️ Delete
-                        </button>
-                      )}
+                    <div style={{ fontSize: 12, color: '#64748b' }}>
+                      <strong>Items:</strong> {order.items?.map(i => `${i.name} (x${i.qty})`).join(', ')}
                     </div>
                   </div>
                 ))}
@@ -802,7 +844,7 @@ export default function App() {
         {/* VIEW B: CUSTOMER MENU & LATEST ORDER LIVE TRACKER */}
         {activeTab === 'customer' && (
           <div>
-            {/* Live Latest Order Status Box (GATED STRICTLY BEHIND ADMIN CONFIRMATION) */}
+            {/* Live Latest Order Status Box */}
             {latestUserOrder && latestUserOrder.status !== 'Delivered' && (
               <div style={{
                 backgroundColor: '#ffffff',
@@ -815,7 +857,7 @@ export default function App() {
                   latestUserOrder.paymentConfirmed ? '#0f8a65' : '#f59e0b'
                 }`
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'gap', gap: 8 }}>
                   <div>
                     <span style={{
                       fontSize: 11,
@@ -1346,7 +1388,7 @@ export default function App() {
                 type="submit"
                 disabled={isSubmittingOrder}
                 style={{ width: '100%', backgroundColor: '#0f8a65', color: '#fff', border: 'none', padding: 14, borderRadius: 10, fontWeight: 900, fontSize: 15, cursor: isSubmittingOrder ? 'wait' : 'pointer', boxShadow: '0 4px 14px rgba(15,138,101,0.3)' }}>
-                {isSubmittingOrder ? 'Opening UPI...' : `⚡ Open UPI App & Pay ₹${cartTotal}`}
+                {isSubmittingOrder ? 'Saving Order...' : `⚡ Open UPI App & Pay ₹${cartTotal}`}
               </button>
             </form>
           </div>

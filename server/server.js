@@ -3,14 +3,28 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors());
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma']
+}));
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+// Disable all caching on all API responses
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
 
 const MONGO_URI = 'mongodb+srv://ankit917379_db_user:LasarFood2026@lasar-cluster.hlz0irb.mongodb.net/lasarDB?retryWrites=true&w=majority&appName=lasar-cluster';
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('🍃 MongoDB Atlas Connected!'))
+  .then(() => console.log('🍃 MongoDB Atlas Connected Successfully!'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
 const MenuItemSchema = new mongoose.Schema({
@@ -51,7 +65,6 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Helper for finding order
 const findOrder = (idParam) => {
   if (mongoose.Types.ObjectId.isValid(idParam)) {
     return { $or: [{ orderId: idParam }, { _id: idParam }] };
@@ -59,7 +72,7 @@ const findOrder = (idParam) => {
   return { orderId: idParam };
 };
 
-// 1. Create Order
+// 1. Create Order — Guarantees save and returns the created document
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -67,25 +80,25 @@ app.post('/api/orders', async (req, res) => {
 
     const order = new Order({
       orderId: 'LSR-' + Math.floor(100000 + Math.random() * 900000),
-      customerName: customerName.trim(),
+      customerName: (customerName || 'Customer').trim(),
       phone: cleanPhone,
       deliveryArea: deliveryArea || 'Area not specified',
-      address: address.trim(),
-      landmark: landmark || '',
-      items,
-      totalAmount,
+      address: (address || '').trim(),
+      landmark: (landmark || '').trim(),
+      items: items || [],
+      totalAmount: Number(totalAmount) || 0,
       paymentConfirmed: false,
       deliverySlot: '',
       status: 'Pending Verification',
       otp: Math.floor(1000 + Math.random() * 9000)
     });
 
-    const saved = await order.save();
-    console.log(`✅ Order SAVED in MongoDB: #${saved.orderId} for phone: ${saved.phone}`);
-    res.status(201).json({ success: true, order: saved });
+    const savedOrder = await order.save();
+    console.log(`✅ Order Saved in MongoDB Atlas: #${savedOrder.orderId} for phone ${savedOrder.phone}`);
+    return res.status(201).json({ success: true, order: savedOrder });
   } catch (err) {
     console.error('❌ Error saving order:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -105,15 +118,15 @@ app.patch('/api/orders/:id/approve', async (req, res) => {
       },
       { new: true }
     );
-    if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
+    if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
     console.log(`✅ Admin Approved Order #${updatedOrder.orderId}`);
-    res.json({ success: true, order: updatedOrder });
+    return res.json({ success: true, order: updatedOrder });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 3. Admin Rejects Unpaid Order (Status updated to Rejected, NEVER DELETED)
+// 3. Admin Rejects Fake / Unpaid Order
 app.patch('/api/orders/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -124,21 +137,20 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
         $set: { 
           paymentConfirmed: false, 
           status: 'Rejected',
-          cancellationReason: reason || 'Payment was not credited to Admin bank account'
+          cancellationReason: reason || 'Payment was not credited to bank account'
         } 
       },
       { new: true }
     );
-    if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
+    if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
     console.log(`❌ Admin Rejected Order #${updatedOrder.orderId}`);
-    res.json({ success: true, order: updatedOrder });
+    return res.json({ success: true, order: updatedOrder });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // 4. Update Kitchen Status (Food is being prepared, Out for Delivery, Delivered)
-// NOTE: Delivered orders remain permanently in MongoDB so customers keep their history
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -148,11 +160,10 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       { $set: { status } },
       { new: true }
     );
-    if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
-    console.log(`📦 Status changed for #${updatedOrder.orderId} to ${status}`);
-    res.json({ success: true, order: updatedOrder });
+    if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
+    return res.json({ success: true, order: updatedOrder });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -160,53 +171,49 @@ app.patch('/api/orders/:id/status', async (req, res) => {
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = findOrder(req.params.id);
-    await Order.deleteMany(query);
-    res.json({ success: true });
+    const result = await Order.deleteMany(query);
+    return res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 6. Clear All Rejected Orders from Database
-app.post('/api/orders/clear-all-rejected', async (req, res) => {
+// 6. CLEAR ALL REJECTED ORDERS FROM MONGODB PERMANENTLY
+const clearRejectedHandler = async (req, res) => {
   try {
     const result = await Order.deleteMany({
-      $or: [{ status: 'Rejected' }, { status: 'Cancelled' }]
+      $or: [
+        { status: 'Rejected' },
+        { status: 'Cancelled' }
+      ]
     });
-    res.json({ success: true, deletedCount: result.deletedCount });
+    console.log(`🧹 Permanently purged rejected orders. Count: ${result.deletedCount}`);
+    return res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+app.post('/api/orders/clear-all-rejected', clearRejectedHandler);
+app.delete('/api/orders/clear-all-rejected', clearRejectedHandler);
 
-// 7. Get Customer Orders History by Phone (Matches exact 10-digit number)
+// 7. Get Customer Orders History by Phone
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
-    res.set({
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    });
     const cleanPhone = String(req.params.phone).trim().replace(/\D/g, '');
     const userOrders = await Order.find({ phone: cleanPhone }).sort({ createdAt: -1 });
-    res.json(userOrders);
+    return res.json(userOrders);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // 8. Get All Active Orders for Admin
 app.get('/api/orders', async (req, res) => {
   try {
-    res.set({
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    });
     const orders = await Order.find().sort({ createdAt: -1 });
-    res.json(orders);
+    return res.json(orders);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -223,18 +230,18 @@ app.post('/api/menu/upload', async (req, res) => {
       restaurantName: req.body.restaurantName || 'LASAR Cloud Kitchen'
     });
     await dish.save();
-    res.status(201).json({ success: true, item: dish });
+    return res.status(201).json({ success: true, item: dish });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 app.get('/api/menu', async (req, res) => {
   try {
     const approvedDishes = await MenuItem.find({ auditStatus: 'approved' }).sort({ createdAt: -1 });
-    res.json(approvedDishes);
+    return res.json(approvedDishes);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -243,9 +250,9 @@ app.get('/api/admin/audit-queue', async (req, res) => {
     const pendingDishes = await MenuItem.find({ auditStatus: 'pending_audit' }).sort({ createdAt: -1 });
     const approvedDishes = await MenuItem.find({ auditStatus: 'approved' }).sort({ createdAt: -1 });
     const rejectedDishes = await MenuItem.find({ auditStatus: 'rejected' }).sort({ createdAt: -1 });
-    res.json({ pendingDishes, approvedDishes, rejectedDishes });
+    return res.json({ pendingDishes, approvedDishes, rejectedDishes });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -253,15 +260,15 @@ app.post('/api/admin/audit-decision', async (req, res) => {
   try {
     const { dishId, decision, feedback } = req.body;
     const dish = await MenuItem.findById(dishId);
-    if (!dish) return res.status(404).json({ error: 'Dish not found' });
+    if (!dish) return res.status(404).json({ success: false, error: 'Dish not found' });
 
     dish.auditStatus = decision;
     dish.adminFeedback = feedback || (decision === 'approved' ? 'Approved by Admin' : 'Quality rejected');
     await dish.save();
 
-    res.json({ success: true, dish });
+    return res.json({ success: true, dish });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -273,20 +280,20 @@ app.patch('/api/admin/dish/:id', async (req, res) => {
     if (auditStatus !== undefined) updateFields.auditStatus = auditStatus;
 
     const updatedDish = await MenuItem.findByIdAndUpdate(req.params.id, { $set: updateFields }, { new: true });
-    if (!updatedDish) return res.status(404).json({ error: 'Dish not found' });
-    res.json({ success: true, dish: updatedDish });
+    if (!updatedDish) return res.status(404).json({ success: false, error: 'Dish not found' });
+    return res.json({ success: true, dish: updatedDish });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 app.delete('/api/admin/dish/:id', async (req, res) => {
   try {
     const deletedDish = await MenuItem.findByIdAndDelete(req.params.id);
-    if (!deletedDish) return res.status(404).json({ error: 'Dish not found' });
-    res.json({ success: true, message: 'Dish deleted permanently' });
+    if (!deletedDish) return res.status(404).json({ success: false, error: 'Dish not found' });
+    return res.json({ success: true, message: 'Dish deleted permanently' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
