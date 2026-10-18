@@ -13,7 +13,7 @@ app.use(cors({
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Disable all caching on all API responses
+// Never cache any API responses
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -24,7 +24,7 @@ app.use((req, res, next) => {
 const MONGO_URI = 'mongodb+srv://ankit917379_db_user:LasarFood2026@lasar-cluster.hlz0irb.mongodb.net/lasarDB?retryWrites=true&w=majority&appName=lasar-cluster';
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('🍃 MongoDB Atlas Connected Successfully!'))
+  .then(() => console.log('🍃 MongoDB Atlas Connected!'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
 const MenuItemSchema = new mongoose.Schema({
@@ -65,14 +65,25 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-const findOrder = (idParam) => {
-  if (mongoose.Types.ObjectId.isValid(idParam)) {
-    return { $or: [{ orderId: idParam }, { _id: idParam }] };
+// Dedicated Clean-All Endpoint Placed BEFORE Dynamic Route Parameters
+app.all('/api/clear-all-rejected-orders', async (req, res) => {
+  try {
+    const result = await Order.deleteMany({
+      $or: [
+        { status: 'Rejected' },
+        { status: 'Cancelled' },
+        { cancellationReason: { $ne: '' } }
+      ]
+    });
+    console.log(`🧹 Permanently purged rejected orders. Count: ${result.deletedCount}`);
+    return res.json({ success: true, deletedCount: result.deletedCount });
+  } catch (err) {
+    console.error('❌ Clear rejected error:', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
-  return { orderId: idParam };
-};
+});
 
-// 1. Create Order — Guarantees save and returns the created document
+// 1. Create Order
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -94,7 +105,7 @@ app.post('/api/orders', async (req, res) => {
     });
 
     const savedOrder = await order.save();
-    console.log(`✅ Order Saved in MongoDB Atlas: #${savedOrder.orderId} for phone ${savedOrder.phone}`);
+    console.log(`✅ Order SAVED in MongoDB: #${savedOrder.orderId} for phone ${savedOrder.phone}`);
     return res.status(201).json({ success: true, order: savedOrder });
   } catch (err) {
     console.error('❌ Error saving order:', err);
@@ -106,9 +117,9 @@ app.post('/api/orders', async (req, res) => {
 app.patch('/api/orders/:id/approve', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
-    const query = findOrder(req.params.id);
+    const orderIdParam = req.params.id;
     const updatedOrder = await Order.findOneAndUpdate(
-      query,
+      { $or: [{ orderId: orderIdParam }, { _id: mongoose.Types.ObjectId.isValid(orderIdParam) ? orderIdParam : null }] },
       { 
         $set: { 
           paymentConfirmed: true, 
@@ -130,9 +141,9 @@ app.patch('/api/orders/:id/approve', async (req, res) => {
 app.patch('/api/orders/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
-    const query = findOrder(req.params.id);
+    const orderIdParam = req.params.id;
     const updatedOrder = await Order.findOneAndUpdate(
-      query,
+      { $or: [{ orderId: orderIdParam }, { _id: mongoose.Types.ObjectId.isValid(orderIdParam) ? orderIdParam : null }] },
       { 
         $set: { 
           paymentConfirmed: false, 
@@ -150,13 +161,13 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
   }
 });
 
-// 4. Update Kitchen Status (Food is being prepared, Out for Delivery, Delivered)
+// 4. Update Kitchen Status
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
-    const query = findOrder(req.params.id);
+    const orderIdParam = req.params.id;
     const updatedOrder = await Order.findOneAndUpdate(
-      query,
+      { $or: [{ orderId: orderIdParam }, { _id: mongoose.Types.ObjectId.isValid(orderIdParam) ? orderIdParam : null }] },
       { $set: { status } },
       { new: true }
     );
@@ -170,33 +181,17 @@ app.patch('/api/orders/:id/status', async (req, res) => {
 // 5. Delete specific order completely
 app.delete('/api/orders/:id', async (req, res) => {
   try {
-    const query = findOrder(req.params.id);
-    const result = await Order.deleteMany(query);
+    const orderIdParam = req.params.id;
+    const result = await Order.deleteMany({
+      $or: [{ orderId: orderIdParam }, { _id: mongoose.Types.ObjectId.isValid(orderIdParam) ? orderIdParam : null }]
+    });
     return res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 6. CLEAR ALL REJECTED ORDERS FROM MONGODB PERMANENTLY
-const clearRejectedHandler = async (req, res) => {
-  try {
-    const result = await Order.deleteMany({
-      $or: [
-        { status: 'Rejected' },
-        { status: 'Cancelled' }
-      ]
-    });
-    console.log(`🧹 Permanently purged rejected orders. Count: ${result.deletedCount}`);
-    return res.json({ success: true, deletedCount: result.deletedCount });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
-  }
-};
-app.post('/api/orders/clear-all-rejected', clearRejectedHandler);
-app.delete('/api/orders/clear-all-rejected', clearRejectedHandler);
-
-// 7. Get Customer Orders History by Phone
+// 6. Get Customer Orders History by Phone
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
     const cleanPhone = String(req.params.phone).trim().replace(/\D/g, '');
@@ -207,7 +202,7 @@ app.get('/api/orders/user/:phone', async (req, res) => {
   }
 });
 
-// 8. Get All Active Orders for Admin
+// 7. Get All Active Orders for Admin
 app.get('/api/orders', async (req, res) => {
   try {
     const orders = await Order.find().sort({ createdAt: -1 });

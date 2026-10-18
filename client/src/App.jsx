@@ -37,16 +37,16 @@ export default function App() {
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
 
-  // Load persistent orders directly by logged in phone number from device storage
+  // Load user order history directly from device localStorage
   const [userHistory, setUserHistory] = useState(() => {
     try {
       const savedUser = localStorage.getItem('lasar_user');
       if (savedUser) {
         const parsed = JSON.parse(savedUser);
-        const phone = (parsed.phone || parsed.identifier || '').replace(/\D/g, '');
-        if (phone) {
-          const stored = localStorage.getItem(`lasar_phone_history_${phone}`);
-          return stored ? JSON.parse(stored) : [];
+        const p = (parsed.phone || parsed.identifier || '').replace(/\D/g, '');
+        if (p) {
+          const cached = localStorage.getItem(`lasar_orders_${p}`);
+          return cached ? JSON.parse(cached) : [];
         }
       }
       return [];
@@ -91,32 +91,31 @@ export default function App() {
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   const isAdmin = user && user.isAdmin;
 
-  // Keep phone history synced in local storage
-  const saveUserOrdersLocally = (phone, ordersList) => {
-    if (!phone) return;
-    const clean = String(phone).replace(/\D/g, '');
+  // Persist history helper
+  const syncToLocalStorage = (phoneNum, list) => {
+    if (!phoneNum) return;
+    const clean = String(phoneNum).replace(/\D/g, '');
     try {
-      localStorage.setItem(`lasar_phone_history_${clean}`, JSON.stringify(ordersList));
+      localStorage.setItem(`lasar_orders_${clean}`, JSON.stringify(list));
     } catch {
-      // ignore quota
+      // ignore
     }
   };
 
   useEffect(() => {
     if (user) {
-      const userPhone = (user.phone || user.identifier || '').replace(/\D/g, '');
+      const p = (user.phone || user.identifier || '').replace(/\D/g, '');
       setCustomerForm(prev => ({
         ...prev,
         name: user.name || prev.name,
-        phone: userPhone || prev.phone
+        phone: p || prev.phone
       }));
 
-      // Immediately restore this phone's stored history
-      if (userPhone) {
+      if (p) {
         try {
-          const localSaved = localStorage.getItem(`lasar_phone_history_${userPhone}`);
-          if (localSaved) {
-            setUserHistory(JSON.parse(localSaved));
+          const stored = localStorage.getItem(`lasar_orders_${p}`);
+          if (stored) {
+            setUserHistory(JSON.parse(stored));
           }
         } catch {
           // ignore
@@ -127,11 +126,7 @@ export default function App() {
 
   const safeFetchJson = async (url, options = {}) => {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 second graceful timeout
-      const res = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(timeoutId);
-
+      const res = await fetch(url, options);
       const text = await res.text();
       try {
         return { ok: res.ok, status: res.status, data: JSON.parse(text) };
@@ -159,8 +154,9 @@ export default function App() {
     if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
-  // Sync orders for Admin and Phone History
+  // Sync orders for Admin & Customer History
   const fetchOrders = async () => {
+    // 1. If Admin, always fetch all orders
     if (isAdmin) {
       const res = await safeFetchJson(`${API_BASE}/api/orders?ts=` + Date.now());
       if (res.ok && Array.isArray(res.data)) {
@@ -168,12 +164,13 @@ export default function App() {
       }
     }
 
+    // 2. Customer history
     const currentPhone = (user?.phone || user?.identifier || customerForm.phone || '').replace(/\D/g, '');
     if (currentPhone) {
       const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${currentPhone}?ts=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
         setUserHistory(userRes.data);
-        saveUserOrdersLocally(currentPhone, userRes.data);
+        syncToLocalStorage(currentPhone, userRes.data);
       }
     }
   };
@@ -260,12 +257,11 @@ export default function App() {
       setUser(regularUser);
       localStorage.setItem('lasar_user', JSON.stringify(regularUser));
 
-      // Instantly load this phone's cached history
       if (cleanPhone) {
         try {
-          const cached = localStorage.getItem(`lasar_phone_history_${cleanPhone}`);
-          if (cached) {
-            setUserHistory(JSON.parse(cached));
+          const stored = localStorage.getItem(`lasar_orders_${cleanPhone}`);
+          if (stored) {
+            setUserHistory(JSON.parse(stored));
           }
         } catch {
           // ignore
@@ -288,7 +284,7 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // ADMIN APPROVES ORDER AND SETS DELIVERY TIME
+  // ADMIN APPROVES ORDER AND SETS TIME
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
     const orderId = slotModalOrder.orderId;
@@ -343,13 +339,17 @@ export default function App() {
     fetchOrders();
   };
 
-  // CLEAR ALL REJECTED ORDERS FROM MONGODB & VIEW
+  // CLEAR ALL REJECTED ORDERS PERMANENTLY FROM DATABASE
   const handleClearAllRejected = async () => {
+    // 1. Immediately wipe from screen
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
-    await safeFetchJson(`${API_BASE}/api/orders/clear-all-rejected`, {
+
+    // 2. Execute database delete
+    await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
+
     fetchOrders();
   };
 
@@ -464,13 +464,13 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER (Waits for database to save before redirecting to UPI)
+  // USER SUBMITS ORDER
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
 
     const cleanedPhone = customerForm.phone.trim().replace(/\D/g, '');
-    if (cleanedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
+    if (cleanedPhone.length !== 10) return alert('Mobile number must be 10 digits.');
     if (!customerForm.deliveryArea.trim()) return alert('Please enter delivery area.');
     if (!customerForm.address.trim()) return alert('Please enter complete delivery address.');
     if (!customerForm.landmark.trim()) return alert('Please enter nearest landmark.');
@@ -498,20 +498,18 @@ export default function App() {
       setCart([]);
       setOrderModalOpen(false);
 
-      // Save immediately to local device cache for this phone
-      const updatedHistory = [createdOrder, ...userHistory.filter(o => o.orderId !== createdOrder.orderId)];
-      setUserHistory(updatedHistory);
-      saveUserOrdersLocally(cleanedPhone, updatedHistory);
+      // Save locally immediately
+      const updatedList = [createdOrder, ...userHistory.filter(o => o.orderId !== createdOrder.orderId)];
+      setUserHistory(updatedList);
+      syncToLocalStorage(cleanedPhone, updatedList);
 
-      // Switch to history view so customer sees their pending status immediately
       setActiveTab('history');
       fetchOrders();
 
-      // Launch UPI
       const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
       window.location.href = upiUrl;
     } else {
-      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server is waking up, please tap again in 5 seconds.'));
+      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server waking up, please tap again in 5 seconds.'));
     }
   };
 
@@ -526,9 +524,23 @@ export default function App() {
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
   // Split orders for Admin view
-  const pendingOrders = orders.filter(o => o.status === 'Pending Verification');
-  const approvedActiveOrders = orders.filter(o => o.paymentConfirmed && o.status !== 'Delivered' && o.status !== 'Rejected' && o.status !== 'Cancelled');
-  const rejectedOrders = orders.filter(o => o.status === 'Rejected' || o.status === 'Cancelled');
+  const pendingOrders = orders.filter(o => 
+    !o.paymentConfirmed && 
+    o.status !== 'Rejected' && 
+    o.status !== 'Cancelled'
+  );
+
+  const approvedActiveOrders = orders.filter(o => 
+    o.paymentConfirmed && 
+    o.status !== 'Delivered' && 
+    o.status !== 'Rejected' && 
+    o.status !== 'Cancelled'
+  );
+
+  const rejectedOrders = orders.filter(o => 
+    o.status === 'Rejected' || 
+    o.status === 'Cancelled'
+  );
 
   // ==========================================
   // VIEW 1: GATEKEEPER LOGIN ONLY
@@ -728,7 +740,7 @@ export default function App() {
               </button>
             ) : (
               <button onClick={() => { setActiveTab('adminOrders'); fetchOrders(); }} style={{ padding: '6px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: 11, backgroundColor: activeTab === 'adminOrders' ? '#282c3f' : '#f0f0f5', color: activeTab === 'adminOrders' ? '#fff' : '#3d4152' }}>
-                📦 Orders Received ({pendingOrders.length + approvedActiveOrders.length})
+                📦 Orders Received ({orders.length})
               </button>
             )}
 
@@ -857,7 +869,7 @@ export default function App() {
                   latestUserOrder.paymentConfirmed ? '#0f8a65' : '#f59e0b'
                 }`
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'gap', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                   <div>
                     <span style={{
                       fontSize: 11,
@@ -1143,7 +1155,7 @@ export default function App() {
               )}
             </div>
 
-            {/* 3. REJECTED ORDERS SECTION */}
+            {/* 3. REJECTED ORDERS SECTION WITH PURGE ALL */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #ef4444' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
