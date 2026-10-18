@@ -40,7 +40,6 @@ const OrderSchema = new mongoose.Schema({
   deliverySlot: { type: String, default: '' },
   status: { type: String, default: 'Pending Verification' },
   cancellationReason: { type: String, default: '' },
-  userDeleted: { type: Boolean, default: false }, // User can delete from their own history
   otp: Number,
   createdAt: { type: Date, default: Date.now }
 });
@@ -52,7 +51,7 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Helper for finding order by orderId or _id
+// Helper for finding order
 const findOrder = (idParam) => {
   if (mongoose.Types.ObjectId.isValid(idParam)) {
     return { $or: [{ orderId: idParam }, { _id: idParam }] };
@@ -60,7 +59,7 @@ const findOrder = (idParam) => {
   return { orderId: idParam };
 };
 
-// 1. Create Order (Guaranteed Sync)
+// 1. Create Order
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -82,7 +81,7 @@ app.post('/api/orders', async (req, res) => {
     });
 
     const saved = await order.save();
-    console.log(`✅ Order SAVED successfully in MongoDB: #${saved.orderId} for phone: ${saved.phone}`);
+    console.log(`✅ Order SAVED in MongoDB: #${saved.orderId} for phone: ${saved.phone}`);
     res.status(201).json({ success: true, order: saved });
   } catch (err) {
     console.error('❌ Error saving order:', err);
@@ -90,7 +89,7 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// 2. Admin Confirms Payment & Accepts Order
+// 2. Admin Confirms Payment & Sets Time Slot
 app.patch('/api/orders/:id/approve', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
@@ -114,7 +113,7 @@ app.patch('/api/orders/:id/approve', async (req, res) => {
   }
 });
 
-// 3. Admin Rejects Fake / Unpaid Order
+// 3. Admin Rejects Unpaid Order (Status updated to Rejected, NEVER DELETED)
 app.patch('/api/orders/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -125,7 +124,7 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
         $set: { 
           paymentConfirmed: false, 
           status: 'Rejected',
-          cancellationReason: reason || 'Payment was not credited to bank account'
+          cancellationReason: reason || 'Payment was not credited to Admin bank account'
         } 
       },
       { new: true }
@@ -138,7 +137,8 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
   }
 });
 
-// 4. Update Kitchen Status (Out for Delivery, Delivered)
+// 4. Update Kitchen Status (Food is being prepared, Out for Delivery, Delivered)
+// NOTE: Delivered orders remain permanently in MongoDB so customers keep their history
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -149,24 +149,14 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ error: 'Order not found' });
+    console.log(`📦 Status changed for #${updatedOrder.orderId} to ${status}`);
     res.json({ success: true, order: updatedOrder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 5. User Soft-Deletes Order from their Personal History
-app.patch('/api/orders/:id/user-delete', async (req, res) => {
-  try {
-    const query = findOrder(req.params.id);
-    await Order.findOneAndUpdate(query, { $set: { userDeleted: true } });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 6. Delete Order Permanently
+// 5. Delete specific order completely
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = findOrder(req.params.id);
@@ -177,7 +167,7 @@ app.delete('/api/orders/:id', async (req, res) => {
   }
 });
 
-// 7. Clear All Rejected Orders
+// 6. Clear All Rejected Orders from Database
 app.post('/api/orders/clear-all-rejected', async (req, res) => {
   try {
     const result = await Order.deleteMany({
@@ -189,25 +179,30 @@ app.post('/api/orders/clear-all-rejected', async (req, res) => {
   }
 });
 
-// 8. Get Customer Orders by Phone (Robust matching + userDeleted filter)
+// 7. Get Customer Orders History by Phone (Matches exact 10-digit number)
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
-    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate' });
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
     const cleanPhone = String(req.params.phone).trim().replace(/\D/g, '');
-    const userOrders = await Order.find({ 
-      phone: cleanPhone,
-      userDeleted: { $ne: true }
-    }).sort({ createdAt: -1 });
+    const userOrders = await Order.find({ phone: cleanPhone }).sort({ createdAt: -1 });
     res.json(userOrders);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 9. Get All Active Orders for Admin
+// 8. Get All Active Orders for Admin
 app.get('/api/orders', async (req, res) => {
   try {
-    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate' });
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
