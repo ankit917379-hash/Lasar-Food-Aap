@@ -32,28 +32,11 @@ export default function App() {
   const [isSendingOtp, setIsSendingOtp] = useState(false);
 
   // App tabs & data
-  const [activeTab, setActiveTab] = useState('customer'); // 'customer' | 'history' | 'adminOrders' | 'admin'
+  const [activeTab, setActiveTab] = useState(user && user.isAdmin ? 'adminOrders' : 'customer');
   const [menu, setMenu] = useState([]);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
-
-  // Load user order history directly from device localStorage
-  const [userHistory, setUserHistory] = useState(() => {
-    try {
-      const savedUser = localStorage.getItem('lasar_user');
-      if (savedUser) {
-        const parsed = JSON.parse(savedUser);
-        const p = (parsed.phone || parsed.identifier || '').replace(/\D/g, '');
-        if (p) {
-          const cached = localStorage.getItem(`lasar_orders_${p}`);
-          return cached ? JSON.parse(cached) : [];
-        }
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  });
+  const [userHistory, setUserHistory] = useState([]);
 
   const [auditQueue, setAuditQueue] = useState({ pendingDishes: [], approvedDishes: [], rejectedDishes: [] });
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,17 +74,7 @@ export default function App() {
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   const isAdmin = user && user.isAdmin;
 
-  // Persist history helper
-  const syncToLocalStorage = (phoneNum, list) => {
-    if (!phoneNum) return;
-    const clean = String(phoneNum).replace(/\D/g, '');
-    try {
-      localStorage.setItem(`lasar_orders_${clean}`, JSON.stringify(list));
-    } catch {
-      // ignore
-    }
-  };
-
+  // Auto-fill form and clean phone identifier
   useEffect(() => {
     if (user) {
       const p = (user.phone || user.identifier || '').replace(/\D/g, '');
@@ -110,23 +83,16 @@ export default function App() {
         name: user.name || prev.name,
         phone: p || prev.phone
       }));
-
-      if (p) {
-        try {
-          const stored = localStorage.getItem(`lasar_orders_${p}`);
-          if (stored) {
-            setUserHistory(JSON.parse(stored));
-          }
-        } catch {
-          // ignore
-        }
-      }
     }
   }, [user]);
 
   const safeFetchJson = async (url, options = {}) => {
     try {
-      const res = await fetch(url, options);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+
       const text = await res.text();
       try {
         return { ok: res.ok, status: res.status, data: JSON.parse(text) };
@@ -154,9 +120,8 @@ export default function App() {
     if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
-  // Sync orders for Admin & Customer History
+  // Sync orders for Admin & Customer History directly from MongoDB
   const fetchOrders = async () => {
-    // 1. If Admin, always fetch all orders
     if (isAdmin) {
       const res = await safeFetchJson(`${API_BASE}/api/orders?ts=` + Date.now());
       if (res.ok && Array.isArray(res.data)) {
@@ -164,13 +129,11 @@ export default function App() {
       }
     }
 
-    // 2. Customer history
     const currentPhone = (user?.phone || user?.identifier || customerForm.phone || '').replace(/\D/g, '');
     if (currentPhone) {
       const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${currentPhone}?ts=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
         setUserHistory(userRes.data);
-        syncToLocalStorage(currentPhone, userRes.data);
       }
     }
   };
@@ -185,7 +148,7 @@ export default function App() {
       const interval = setInterval(() => {
         checkHealth();
         fetchOrders();
-      }, 3500);
+      }, 3000);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin]);
@@ -256,18 +219,6 @@ export default function App() {
       };
       setUser(regularUser);
       localStorage.setItem('lasar_user', JSON.stringify(regularUser));
-
-      if (cleanPhone) {
-        try {
-          const stored = localStorage.getItem(`lasar_orders_${cleanPhone}`);
-          if (stored) {
-            setUserHistory(JSON.parse(stored));
-          }
-        } catch {
-          // ignore
-        }
-      }
-
       setAuthStep(false);
       setEnteredCode('');
       setActiveTab('customer');
@@ -278,6 +229,8 @@ export default function App() {
     localStorage.removeItem('lasar_user');
     setUser(null);
     setCart([]);
+    setOrders([]);
+    setUserHistory([]);
     setActiveTab('customer');
     setAuthStep(false);
     setEnteredCode('');
@@ -339,12 +292,10 @@ export default function App() {
     fetchOrders();
   };
 
-  // CLEAR ALL REJECTED ORDERS PERMANENTLY FROM DATABASE
+  // GUARANTEED PURGE OF REJECTED ORDERS FROM MONGODB
   const handleClearAllRejected = async () => {
-    // 1. Immediately wipe from screen
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
 
-    // 2. Execute database delete
     await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
@@ -464,13 +415,13 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER
+  // USER SUBMITS ORDER (Saved directly to MongoDB before launching UPI)
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
 
     const cleanedPhone = customerForm.phone.trim().replace(/\D/g, '');
-    if (cleanedPhone.length !== 10) return alert('Mobile number must be 10 digits.');
+    if (cleanedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
     if (!customerForm.deliveryArea.trim()) return alert('Please enter delivery area.');
     if (!customerForm.address.trim()) return alert('Please enter complete delivery address.');
     if (!customerForm.landmark.trim()) return alert('Please enter nearest landmark.');
@@ -498,11 +449,8 @@ export default function App() {
       setCart([]);
       setOrderModalOpen(false);
 
-      // Save locally immediately
-      const updatedList = [createdOrder, ...userHistory.filter(o => o.orderId !== createdOrder.orderId)];
-      setUserHistory(updatedList);
-      syncToLocalStorage(cleanedPhone, updatedList);
-
+      // Add to user history immediately
+      setUserHistory(prev => [createdOrder, ...prev]);
       setActiveTab('history');
       fetchOrders();
 
@@ -523,7 +471,7 @@ export default function App() {
 
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
-  // Split orders for Admin view
+  // Broad filtering ensuring all unapproved orders show in Admin without dropping
   const pendingOrders = orders.filter(o => 
     !o.paymentConfirmed && 
     o.status !== 'Rejected' && 
@@ -764,7 +712,7 @@ export default function App() {
       {/* Main Content Area */}
       <main style={{ maxWidth: 860, margin: '14px auto', padding: '0 16px' }}>
 
-        {/* VIEW A: CUSTOMER ORDER HISTORY (PERSISTENT LOG) */}
+        {/* VIEW A: CUSTOMER ORDER HISTORY (PERSISTENT LOG DIRECT FROM MONGO) */}
         {!isAdmin && activeTab === 'history' && (
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -856,7 +804,6 @@ export default function App() {
         {/* VIEW B: CUSTOMER MENU & LATEST ORDER LIVE TRACKER */}
         {activeTab === 'customer' && (
           <div>
-            {/* Live Latest Order Status Box */}
             {latestUserOrder && latestUserOrder.status !== 'Delivered' && (
               <div style={{
                 backgroundColor: '#ffffff',
