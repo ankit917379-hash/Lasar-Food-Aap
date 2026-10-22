@@ -13,7 +13,6 @@ app.use(cors({
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Disable HTTP caching on all API responses
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -65,39 +64,35 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Helper for finding order safely without Mongoose CastError
-function buildOrderQuery(id) {
-  const clean = String(id || '').trim();
-  if (/^[0-9a-fA-F]{24}$/.test(clean)) {
-    return { $or: [{ orderId: clean }, { _id: clean }] };
+// Helper: Safely query without CastError
+const getOrderFilter = (id) => {
+  const cleanId = String(id || '').trim();
+  if (mongoose.Types.ObjectId.isValid(cleanId)) {
+    return { $or: [{ orderId: cleanId }, { _id: new mongoose.Types.ObjectId(cleanId) }] };
   }
-  return { orderId: clean };
-}
+  return { orderId: cleanId };
+};
 
-// 1. CLEAR ALL REJECTED ORDERS PERMANENTLY FROM MONGODB ATLAS
-const clearAllRejectedHandler = async (req, res) => {
+// 1. BULK PURGE REJECTED ORDERS
+const clearAllRejected = async (req, res) => {
   try {
     const result = await Order.deleteMany({
       $or: [
         { status: 'Rejected' },
         { status: 'Cancelled' },
-        { status: { $regex: /reject|cancel/i } },
-        { cancellationReason: { $exists: true, $ne: '' } }
+        { status: { $regex: /reject|cancel/i } }
       ]
     });
-    console.log(`🧹 Permanently purged rejected orders. Count: ${result.deletedCount}`);
+    console.log(`🧹 Purged all rejected orders. Count: ${result.deletedCount}`);
     return res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
-    console.error('❌ Error purging rejected orders:', err);
+    console.error('❌ Error clearing rejected orders:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 };
+app.all('/api/clear-all-rejected-orders', clearAllRejected);
 
-app.post('/api/clear-all-rejected-orders', clearAllRejectedHandler);
-app.delete('/api/clear-all-rejected-orders', clearAllRejectedHandler);
-app.get('/api/clear-all-rejected-orders', clearAllRejectedHandler);
-
-// 2. Create Order
+// 2. CREATE ORDER
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
@@ -119,21 +114,21 @@ app.post('/api/orders', async (req, res) => {
     });
 
     const savedOrder = await order.save();
-    console.log(`✅ Order Saved: #${savedOrder.orderId} for phone ${savedOrder.phone}`);
+    console.log(`✅ Order Saved: #${savedOrder.orderId} for ${savedOrder.phone}`);
     return res.status(201).json({ success: true, order: savedOrder });
   } catch (err) {
-    console.error('❌ Order Save Error:', err);
+    console.error('❌ Error creating order:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 3. Admin Approves Order with Delivery Time Slot
-app.patch('/api/orders/:id/approve', async (req, res) => {
+// 3. ADMIN APPROVE (Supports POST & PATCH to prevent Network Drop)
+const approveHandler = async (req, res) => {
   try {
     const { deliverySlot } = req.body;
-    const query = buildOrderQuery(req.params.id);
+    const filter = getOrderFilter(req.params.id);
     const updatedOrder = await Order.findOneAndUpdate(
-      query,
+      filter,
       { 
         $set: { 
           paymentConfirmed: true, 
@@ -147,18 +142,20 @@ app.patch('/api/orders/:id/approve', async (req, res) => {
     console.log(`✅ Approved Order #${updatedOrder.orderId}`);
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
-    console.error('❌ Approve Error:', err);
+    console.error('❌ Error approving order:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+app.post('/api/orders/:id/approve', approveHandler);
+app.patch('/api/orders/:id/approve', approveHandler);
 
-// 4. Admin Rejects Fake / Unpaid Order
-app.patch('/api/orders/:id/reject', async (req, res) => {
+// 4. ADMIN REJECT (Supports POST & PATCH)
+const rejectHandler = async (req, res) => {
   try {
     const { reason } = req.body;
-    const query = buildOrderQuery(req.params.id);
+    const filter = getOrderFilter(req.params.id);
     const updatedOrder = await Order.findOneAndUpdate(
-      query,
+      filter,
       { 
         $set: { 
           paymentConfirmed: false, 
@@ -172,40 +169,47 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
     console.log(`❌ Rejected Order #${updatedOrder.orderId}`);
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
-    console.error('❌ Reject Error:', err);
+    console.error('❌ Error rejecting order:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+app.post('/api/orders/:id/reject', rejectHandler);
+app.patch('/api/orders/:id/reject', rejectHandler);
 
-// 5. Update Status (Food is being prepared, Out for Delivery, Delivered)
-app.patch('/api/orders/:id/status', async (req, res) => {
+// 5. UPDATE STATUS (Cooking, Out for Delivery, Delivered)
+const statusHandler = async (req, res) => {
   try {
     const { status } = req.body;
-    const query = buildOrderQuery(req.params.id);
+    const filter = getOrderFilter(req.params.id);
     const updatedOrder = await Order.findOneAndUpdate(
-      query,
+      filter,
       { $set: { status } },
       { new: true }
     );
     if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
+    console.error('❌ Error updating order status:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+app.post('/api/orders/:id/status', statusHandler);
+app.patch('/api/orders/:id/status', statusHandler);
 
-// 6. Delete specific order completely
-app.delete('/api/orders/:id', async (req, res) => {
+// 6. DELETE SINGLE ORDER
+const deleteSingleHandler = async (req, res) => {
   try {
-    const query = buildOrderQuery(req.params.id);
-    const result = await Order.deleteMany(query);
+    const filter = getOrderFilter(req.params.id);
+    const result = await Order.deleteMany(filter);
     return res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+app.post('/api/orders/:id/delete', deleteSingleHandler);
+app.delete('/api/orders/:id', deleteSingleHandler);
 
-// 7. Get Customer Order History by Phone (Regex matching last 10 digits guarantees find)
+// 7. GET USER ORDERS HISTORY (Phone Number Match)
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
     const cleanPhone = String(req.params.phone || '').trim().replace(/\D/g, '').slice(-10);
@@ -218,7 +222,7 @@ app.get('/api/orders/user/:phone', async (req, res) => {
   }
 });
 
-// 8. Get All Orders for Admin Dashboard
+// 8. GET ALL ORDERS FOR ADMIN DASHBOARD
 app.get('/api/orders', async (req, res) => {
   try {
     const orders = await Order.find().sort({ createdAt: -1 });

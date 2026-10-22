@@ -54,15 +54,15 @@ export default function App() {
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
 
-  // Load customer order history directly by active phone from localStorage
+  // Direct persistent load by logged in phone
   const [userHistory, setUserHistory] = useState(() => {
     try {
       const savedUser = localStorage.getItem('lasar_user');
       const activePhone = localStorage.getItem('lasar_active_phone');
       const p = (activePhone || (savedUser ? JSON.parse(savedUser).phone : '') || '').replace(/\D/g, '').slice(-10);
       if (p) {
-        const cached = localStorage.getItem(`lasar_orders_v2_${p}`);
-        return cached ? JSON.parse(cached) : [];
+        const stored = localStorage.getItem(`lasar_perm_orders_${p}`);
+        return stored ? JSON.parse(stored) : [];
       }
       return [];
     } catch {
@@ -111,11 +111,11 @@ export default function App() {
     return String(raw).replace(/\D/g, '').slice(-10);
   };
 
-  const syncPhoneHistoryLocally = (phoneNum, list) => {
+  const persistOrdersLocally = (phoneNum, list) => {
     if (!phoneNum) return;
     const clean = String(phoneNum).replace(/\D/g, '').slice(-10);
     try {
-      localStorage.setItem(`lasar_orders_v2_${clean}`, JSON.stringify(list));
+      localStorage.setItem(`lasar_perm_orders_${clean}`, JSON.stringify(list));
       localStorage.setItem('lasar_active_phone', clean);
     } catch {
       // ignore
@@ -133,7 +133,7 @@ export default function App() {
 
       if (p) {
         try {
-          const stored = localStorage.getItem(`lasar_orders_v2_${p}`);
+          const stored = localStorage.getItem(`lasar_perm_orders_${p}`);
           if (stored) {
             setUserHistory(JSON.parse(stored));
           }
@@ -144,14 +144,10 @@ export default function App() {
     }
   }, [user]);
 
-  // Robust Fetcher with 45s graceful timeout for Render waking up
+  // Robust Fetcher that waits up to 60s for Render cold start without aborting
   const safeFetchJson = async (url, options = {}) => {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000);
-      const res = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(timeoutId);
-
+      const res = await fetch(url, options);
       const text = await res.text();
       try {
         return { ok: res.ok, status: res.status, data: JSON.parse(text) };
@@ -193,7 +189,7 @@ export default function App() {
       const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${currentPhone}?ts=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
         setUserHistory(userRes.data);
-        syncPhoneHistoryLocally(currentPhone, userRes.data);
+        persistOrdersLocally(currentPhone, userRes.data);
       }
     }
   };
@@ -208,7 +204,7 @@ export default function App() {
       const interval = setInterval(() => {
         checkHealth();
         fetchOrders();
-      }, 3500);
+      }, 3000);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin]);
@@ -283,7 +279,7 @@ export default function App() {
       if (cleanPhone) {
         localStorage.setItem('lasar_active_phone', cleanPhone);
         try {
-          const cached = localStorage.getItem(`lasar_orders_v2_${cleanPhone}`);
+          const cached = localStorage.getItem(`lasar_perm_orders_${cleanPhone}`);
           if (cached) {
             setUserHistory(JSON.parse(cached));
           }
@@ -309,12 +305,12 @@ export default function App() {
     setIsAdminLoginAttempt(false);
   };
 
-  // Dispatch SMS / WhatsApp direct message to customer phone
-  const notifyCustomerOnMobile = (order, timeSlot) => {
+  // Direct WhatsApp Notification Dispatch to Customer Mobile
+  const notifyCustomerMobile = (order, timeSlot) => {
     const phone = String(order.phone || '').replace(/\D/g, '').slice(-10);
-    const msg = `Hello ${order.customerName}, your LASAR Home Food order #${order.orderId} is APPROVED! Kitchen is preparing your meal. Delivery Window: ${timeSlot}. Passcode: ${order.otp}. Enjoy your meal!`;
-    const whatsappUrl = `https://api.whatsapp.com/send?phone=91${phone}&text=${encodeURIComponent(msg)}`;
-    window.open(whatsappUrl, '_blank');
+    const textMsg = `🍽️ *LASAR HOME FOOD*\n\nHello *${order.customerName}*, your order *#${order.orderId}* has been *APPROVED & CONFIRMED*!\n\n🕒 *Expected Delivery Time:* ${timeSlot}\n🔐 *Delivery Passcode:* ${order.otp}\n💰 *Total Paid:* ₹${order.totalAmount}\n\nOur kitchen has started preparing your fresh food. Thank you!`;
+    const url = `https://wa.me/91${phone}?text=${encodeURIComponent(textMsg)}`;
+    window.open(url, '_blank');
   };
 
   // ADMIN APPROVES ORDER AND SETS TIME
@@ -324,7 +320,7 @@ export default function App() {
     const orderId = targetOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
-    // Update screen instantly
+    // 1. Immediately update UI
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
@@ -334,11 +330,12 @@ export default function App() {
 
     setSlotModalOrder(null);
 
-    // Send confirmation message to customer's mobile
-    notifyCustomerOnMobile(targetOrder, finalSlot);
+    // 2. Open notification to customer mobile
+    notifyCustomerMobile(targetOrder, finalSlot);
 
+    // 3. Persist to MongoDB
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/approve`, {
-      method: 'PATCH',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deliverySlot: finalSlot })
     });
@@ -356,7 +353,7 @@ export default function App() {
     } : o));
 
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
-      method: 'PATCH',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason: 'Payment was not credited to Admin bank account' })
     });
@@ -364,12 +361,12 @@ export default function App() {
     fetchOrders();
   };
 
-  // ADVANCE FOOD STATUS OR DELIVER
+  // UPDATE STATUS (Cooking, Out for Delivery, Delivered)
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status: newStatus } : o));
 
     await safeFetchJson(`${API_BASE}/api/orders/${orderId}/status`, {
-      method: 'PATCH',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus })
     });
@@ -377,17 +374,16 @@ export default function App() {
     fetchOrders();
   };
 
-  // PERMANENT PURGE OF REJECTED ORDERS FROM DATABASE
+  // GUARANTEED PURGE OF REJECTED ORDERS FROM DATABASE
   const handleClearAllRejected = async () => {
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
 
-    const res = await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
-      method: 'POST'
+    await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
     });
 
-    if (res.ok) {
-      fetchOrders();
-    }
+    fetchOrders();
   };
 
   const handleAuditDecision = async (dishId, decision) => {
@@ -535,10 +531,10 @@ export default function App() {
       setCart([]);
       setOrderModalOpen(false);
 
-      // Save locally to this phone number
+      // Save locally immediately to guarantee it never vanishes on refresh
       const updatedList = [createdOrder, ...userHistory.filter(o => o.orderId !== createdOrder.orderId)];
       setUserHistory(updatedList);
-      syncPhoneHistoryLocally(cleanedPhone, updatedList);
+      persistOrdersLocally(cleanedPhone, updatedList);
 
       setActiveTab('history');
       fetchOrders();
@@ -546,7 +542,7 @@ export default function App() {
       const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
       window.location.href = upiUrl;
     } else {
-      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server is waking up, please tap again in 5 seconds.'));
+      alert('Could not submit order. Please check internet connection.');
     }
   };
 
@@ -560,7 +556,7 @@ export default function App() {
 
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
-  // Split orders for Admin view
+  // Real-time categorized order lists for Admin
   const pendingOrders = orders.filter(o => 
     !o.paymentConfirmed && 
     o.status !== 'Rejected' && 
@@ -1451,7 +1447,7 @@ export default function App() {
               Verify & Set Delivery Time
             </h3>
             <p style={{ margin: '0 0 16px 0', fontSize: 12, color: '#686b78' }}>
-              Confirm payment for Order #{slotModalOrder.orderId} from <strong>{slotModalOrder.phone}</strong>. Approving will automatically send confirmation details to customer's mobile!
+              Confirm payment for Order #{slotModalOrder.orderId} from <strong>{slotModalOrder.phone}</strong>. Approving will automatically open WhatsApp notification for customer!
             </p>
 
             <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
