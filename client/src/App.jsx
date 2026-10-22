@@ -9,7 +9,6 @@ const ADMIN_PHONE = '7379434080';
 const ADMIN_UPI = 'ankit917379@okhdfcbank';
 const ADMIN_SECRET_PIN = '9173';
 
-// High-visibility input styling for Android and Laptop (Immune to OS Dark Mode)
 const highContrastInputStyle = {
   width: '100%',
   padding: '12px 14px',
@@ -54,7 +53,22 @@ export default function App() {
   const [menu, setMenu] = useState([]);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [userHistory, setUserHistory] = useState([]);
+
+  // Load customer order history directly by active phone from localStorage
+  const [userHistory, setUserHistory] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('lasar_user');
+      const activePhone = localStorage.getItem('lasar_active_phone');
+      const p = (activePhone || (savedUser ? JSON.parse(savedUser).phone : '') || '').replace(/\D/g, '').slice(-10);
+      if (p) {
+        const cached = localStorage.getItem(`lasar_orders_v2_${p}`);
+        return cached ? JSON.parse(cached) : [];
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
 
   const [auditQueue, setAuditQueue] = useState({ pendingDishes: [], approvedDishes: [], rejectedDishes: [] });
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,22 +106,49 @@ export default function App() {
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   const isAdmin = user && user.isAdmin;
 
-  // Sync customer phone upon login
+  const getEffectivePhone = () => {
+    const raw = user?.phone || localStorage.getItem('lasar_active_phone') || customerForm.phone || '';
+    return String(raw).replace(/\D/g, '').slice(-10);
+  };
+
+  const syncPhoneHistoryLocally = (phoneNum, list) => {
+    if (!phoneNum) return;
+    const clean = String(phoneNum).replace(/\D/g, '').slice(-10);
+    try {
+      localStorage.setItem(`lasar_orders_v2_${clean}`, JSON.stringify(list));
+      localStorage.setItem('lasar_active_phone', clean);
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     if (user) {
-      const p = (user.phone || user.identifier || '').replace(/\D/g, '');
+      const p = getEffectivePhone();
       setCustomerForm(prev => ({
         ...prev,
         name: user.name || prev.name,
         phone: p || prev.phone
       }));
+
+      if (p) {
+        try {
+          const stored = localStorage.getItem(`lasar_orders_v2_${p}`);
+          if (stored) {
+            setUserHistory(JSON.parse(stored));
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
   }, [user]);
 
+  // Robust Fetcher with 45s graceful timeout for Render waking up
   const safeFetchJson = async (url, options = {}) => {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
       const res = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timeoutId);
 
@@ -147,11 +188,12 @@ export default function App() {
       }
     }
 
-    const currentPhone = (user?.phone || user?.identifier || customerForm.phone || '').replace(/\D/g, '');
+    const currentPhone = getEffectivePhone();
     if (currentPhone) {
       const userRes = await safeFetchJson(`${API_BASE}/api/orders/user/${currentPhone}?ts=` + Date.now());
       if (userRes.ok && Array.isArray(userRes.data)) {
         setUserHistory(userRes.data);
+        syncPhoneHistoryLocally(currentPhone, userRes.data);
       }
     }
   };
@@ -166,7 +208,7 @@ export default function App() {
       const interval = setInterval(() => {
         checkHealth();
         fetchOrders();
-      }, 3000);
+      }, 3500);
       return () => clearInterval(interval);
     }
   }, [user, isAdmin]);
@@ -237,6 +279,19 @@ export default function App() {
       };
       setUser(regularUser);
       localStorage.setItem('lasar_user', JSON.stringify(regularUser));
+
+      if (cleanPhone) {
+        localStorage.setItem('lasar_active_phone', cleanPhone);
+        try {
+          const cached = localStorage.getItem(`lasar_orders_v2_${cleanPhone}`);
+          if (cached) {
+            setUserHistory(JSON.parse(cached));
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       setAuthStep(false);
       setEnteredCode('');
       setActiveTab('customer');
@@ -248,19 +303,28 @@ export default function App() {
     setUser(null);
     setCart([]);
     setOrders([]);
-    setUserHistory([]);
     setActiveTab('customer');
     setAuthStep(false);
     setEnteredCode('');
     setIsAdminLoginAttempt(false);
   };
 
+  // Dispatch SMS / WhatsApp direct message to customer phone
+  const notifyCustomerOnMobile = (order, timeSlot) => {
+    const phone = String(order.phone || '').replace(/\D/g, '').slice(-10);
+    const msg = `Hello ${order.customerName}, your LASAR Home Food order #${order.orderId} is APPROVED! Kitchen is preparing your meal. Delivery Window: ${timeSlot}. Passcode: ${order.otp}. Enjoy your meal!`;
+    const whatsappUrl = `https://api.whatsapp.com/send?phone=91${phone}&text=${encodeURIComponent(msg)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
   // ADMIN APPROVES ORDER AND SETS TIME
   const submitAcceptOrderWithSlot = async (slotValue) => {
     if (!slotModalOrder) return;
-    const orderId = slotModalOrder.orderId;
+    const targetOrder = slotModalOrder;
+    const orderId = targetOrder.orderId;
     const finalSlot = slotValue || customSlotInput || '30-40 mins';
 
+    // Update screen instantly
     setOrders(prev => prev.map(o => o.orderId === orderId ? {
       ...o,
       paymentConfirmed: true,
@@ -270,17 +334,16 @@ export default function App() {
 
     setSlotModalOrder(null);
 
-    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/approve`, {
+    // Send confirmation message to customer's mobile
+    notifyCustomerOnMobile(targetOrder, finalSlot);
+
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/approve`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deliverySlot: finalSlot })
     });
 
-    if (res.ok) {
-      fetchOrders();
-    } else {
-      alert('Network issue approving order. Please try again.');
-    }
+    fetchOrders();
   };
 
   // ADMIN REJECTS UNPAID ORDER
@@ -292,17 +355,13 @@ export default function App() {
       cancellationReason: 'Payment was not credited to Admin bank account'
     } : o));
 
-    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
+    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason: 'Payment was not credited to Admin bank account' })
     });
 
-    if (res.ok) {
-      fetchOrders();
-    } else {
-      alert('Network issue rejecting order. Please try again.');
-    }
+    fetchOrders();
   };
 
   // ADVANCE FOOD STATUS OR DELIVER
@@ -318,19 +377,16 @@ export default function App() {
     fetchOrders();
   };
 
-  // PERMANENT PURGE OF REJECTED ORDERS
+  // PERMANENT PURGE OF REJECTED ORDERS FROM DATABASE
   const handleClearAllRejected = async () => {
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
 
     const res = await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      method: 'POST'
     });
 
     if (res.ok) {
       fetchOrders();
-    } else {
-      alert('Error clearing rejected orders from database.');
     }
   };
 
@@ -450,7 +506,7 @@ export default function App() {
     e.preventDefault();
     if (cart.length === 0) return;
 
-    const cleanedPhone = customerForm.phone.trim().replace(/\D/g, '');
+    const cleanedPhone = customerForm.phone.trim().replace(/\D/g, '').slice(-10);
     if (cleanedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
     if (!customerForm.deliveryArea.trim()) return alert('Please enter delivery area.');
     if (!customerForm.address.trim()) return alert('Please enter complete delivery address.');
@@ -479,14 +535,18 @@ export default function App() {
       setCart([]);
       setOrderModalOpen(false);
 
-      setUserHistory(prev => [createdOrder, ...prev.filter(o => o.orderId !== createdOrder.orderId)]);
+      // Save locally to this phone number
+      const updatedList = [createdOrder, ...userHistory.filter(o => o.orderId !== createdOrder.orderId)];
+      setUserHistory(updatedList);
+      syncPhoneHistoryLocally(cleanedPhone, updatedList);
+
       setActiveTab('history');
       fetchOrders();
 
       const upiUrl = `upi://pay?pa=${ADMIN_UPI}&pn=LASAR%20Home%20Food&am=${cartTotal}&cu=INR&tn=${encodeURIComponent('Order ' + createdOrder.orderId)}`;
       window.location.href = upiUrl;
     } else {
-      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server waking up, please tap again in 5 seconds.'));
+      alert('Could not submit order: ' + (orderRes.data?.error || orderRes.error || 'Server is waking up, please tap again in 5 seconds.'));
     }
   };
 
@@ -500,7 +560,7 @@ export default function App() {
 
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
-  // Real-time categorized order lists for Admin
+  // Split orders for Admin view
   const pendingOrders = orders.filter(o => 
     !o.paymentConfirmed && 
     o.status !== 'Rejected' && 
@@ -700,7 +760,7 @@ export default function App() {
                 <span style={{ fontSize: 10, fontWeight: 800, backgroundColor: '#fc8019', color: '#fff', padding: '1px 6px', borderRadius: 4 }}>HOME FOOD</span>
               </div>
               <div style={{ fontSize: 11, color: '#7e808c', marginTop: 1 }}>
-                📍 {user.name} ({user.phone || user.identifier}) {isAdmin ? '🛡️ (Admin)' : ''}
+                📍 {user.name} ({getEffectivePhone() || user.identifier}) {isAdmin ? '🛡️ (Admin)' : ''}
               </div>
             </div>
           </div>
@@ -747,7 +807,7 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 18, color: '#282c3f', fontWeight: 900 }}>Your Orders History</h2>
-                <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#7e808c' }}>Orders placed under: <strong>{user.phone || customerForm.phone}</strong></p>
+                <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#7e808c' }}>Orders placed under: <strong>{getEffectivePhone()}</strong></p>
               </div>
               <button onClick={fetchOrders} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #ccc', backgroundColor: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
                 🔄 Refresh
@@ -1131,7 +1191,7 @@ export default function App() {
               )}
             </div>
 
-            {/* 3. REJECTED ORDERS SECTION WITH RELIABLE PURGE */}
+            {/* 3. REJECTED ORDERS SECTION WITH PURGE ALL */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #ef4444' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
@@ -1313,7 +1373,7 @@ export default function App() {
         </div>
       )}
 
-      {/* REDESIGNED ADDRESS & PAYMENT MODAL (HIGH VISIBILITY INPUTS) */}
+      {/* REDESIGNED ADDRESS & PAYMENT MODAL */}
       {orderModalOpen && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 14 }}>
           <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 440, padding: 22, maxHeight: '92vh', overflowY: 'auto', border: '2px solid #fed7aa', boxShadow: '0 20px 40px rgba(0,0,0,0.2)' }}>
@@ -1383,7 +1443,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MOBILE TIME SLOT MODAL FOR ADMIN */}
+      {/* MOBILE TIME SLOT MODAL FOR ADMIN WITH NOTIFICATION DISPATCH */}
       {slotModalOrder && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, padding: 16 }}>
           <div style={{ backgroundColor: '#ffffff', borderRadius: 16, width: '100%', maxWidth: 380, padding: 20, boxShadow: '0 8px 24px rgba(0,0,0,0.2)' }}>
@@ -1391,7 +1451,7 @@ export default function App() {
               Verify & Set Delivery Time
             </h3>
             <p style={{ margin: '0 0 16px 0', fontSize: 12, color: '#686b78' }}>
-              Confirm credit for Order #{slotModalOrder.orderId} and select expected delivery window:
+              Confirm payment for Order #{slotModalOrder.orderId} from <strong>{slotModalOrder.phone}</strong>. Approving will automatically send confirmation details to customer's mobile!
             </p>
 
             <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
@@ -1438,7 +1498,7 @@ export default function App() {
                 type="button"
                 onClick={() => submitAcceptOrderWithSlot(customSlotInput)}
                 style={{ flex: 1.5, padding: '11px 0', borderRadius: 8, border: 'none', backgroundColor: '#0f8a65', color: '#fff', fontWeight: 900, fontSize: 13, cursor: 'pointer', boxShadow: '0 4px 10px rgba(15,138,101,0.25)' }}>
-                Confirm & Accept
+                Confirm & Notify
               </button>
             </div>
           </div>

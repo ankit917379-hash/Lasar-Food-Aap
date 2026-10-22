@@ -13,7 +13,7 @@ app.use(cors({
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Never cache any API responses
+// Disable HTTP caching on all API responses
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -65,7 +65,7 @@ app.get('/', (req, res) => {
   res.send('LASAR Cloud Kitchen API Server Running');
 });
 
-// Safe query builder that never causes Mongoose CastError
+// Helper for finding order safely without Mongoose CastError
 function buildOrderQuery(id) {
   const clean = String(id || '').trim();
   if (/^[0-9a-fA-F]{24}$/.test(clean)) {
@@ -74,29 +74,34 @@ function buildOrderQuery(id) {
   return { orderId: clean };
 }
 
-// 1. Bulk Clear All Rejected Orders
-app.all('/api/clear-all-rejected-orders', async (req, res) => {
+// 1. CLEAR ALL REJECTED ORDERS PERMANENTLY FROM MONGODB ATLAS
+const clearAllRejectedHandler = async (req, res) => {
   try {
     const result = await Order.deleteMany({
       $or: [
         { status: 'Rejected' },
         { status: 'Cancelled' },
+        { status: { $regex: /reject|cancel/i } },
         { cancellationReason: { $exists: true, $ne: '' } }
       ]
     });
-    console.log(`🧹 Purged all rejected orders. Deleted: ${result.deletedCount}`);
+    console.log(`🧹 Permanently purged rejected orders. Count: ${result.deletedCount}`);
     return res.json({ success: true, deletedCount: result.deletedCount });
   } catch (err) {
     console.error('❌ Error purging rejected orders:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
 
-// 2. Create New Customer Order
+app.post('/api/clear-all-rejected-orders', clearAllRejectedHandler);
+app.delete('/api/clear-all-rejected-orders', clearAllRejectedHandler);
+app.get('/api/clear-all-rejected-orders', clearAllRejectedHandler);
+
+// 2. Create Order
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, phone, deliveryArea, address, landmark, items, totalAmount } = req.body;
-    const cleanPhone = String(phone || '').trim().replace(/\D/g, '');
+    const cleanPhone = String(phone || '').trim().replace(/\D/g, '').slice(-10);
 
     const order = new Order({
       orderId: 'LSR-' + Math.floor(100000 + Math.random() * 900000),
@@ -114,7 +119,7 @@ app.post('/api/orders', async (req, res) => {
     });
 
     const savedOrder = await order.save();
-    console.log(`✅ Order Saved: #${savedOrder.orderId} for ${savedOrder.phone}`);
+    console.log(`✅ Order Saved: #${savedOrder.orderId} for phone ${savedOrder.phone}`);
     return res.status(201).json({ success: true, order: savedOrder });
   } catch (err) {
     console.error('❌ Order Save Error:', err);
@@ -122,7 +127,7 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// 3. Admin Approves Payment & Confirms Order
+// 3. Admin Approves Order with Delivery Time Slot
 app.patch('/api/orders/:id/approve', async (req, res) => {
   try {
     const { deliverySlot } = req.body;
@@ -138,9 +143,7 @@ app.patch('/api/orders/:id/approve', async (req, res) => {
       },
       { new: true }
     );
-    if (!updatedOrder) {
-      return res.status(404).json({ success: false, error: 'Order not found' });
-    }
+    if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
     console.log(`✅ Approved Order #${updatedOrder.orderId}`);
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
@@ -149,7 +152,7 @@ app.patch('/api/orders/:id/approve', async (req, res) => {
   }
 });
 
-// 4. Admin Rejects Payment / Unpaid Order
+// 4. Admin Rejects Fake / Unpaid Order
 app.patch('/api/orders/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -165,9 +168,7 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
       },
       { new: true }
     );
-    if (!updatedOrder) {
-      return res.status(404).json({ success: false, error: 'Order not found' });
-    }
+    if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
     console.log(`❌ Rejected Order #${updatedOrder.orderId}`);
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
@@ -176,7 +177,7 @@ app.patch('/api/orders/:id/reject', async (req, res) => {
   }
 });
 
-// 5. Update Kitchen Status (Preparing, Out for Delivery, Delivered)
+// 5. Update Status (Food is being prepared, Out for Delivery, Delivered)
 app.patch('/api/orders/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
@@ -186,16 +187,14 @@ app.patch('/api/orders/:id/status', async (req, res) => {
       { $set: { status } },
       { new: true }
     );
-    if (!updatedOrder) {
-      return res.status(404).json({ success: false, error: 'Order not found' });
-    }
+    if (!updatedOrder) return res.status(404).json({ success: false, error: 'Order not found' });
     return res.json({ success: true, order: updatedOrder });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 6. Delete a single order permanently
+// 6. Delete specific order completely
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     const query = buildOrderQuery(req.params.id);
@@ -206,11 +205,13 @@ app.delete('/api/orders/:id', async (req, res) => {
   }
 });
 
-// 7. Get Customer Order History by Phone
+// 7. Get Customer Order History by Phone (Regex matching last 10 digits guarantees find)
 app.get('/api/orders/user/:phone', async (req, res) => {
   try {
-    const cleanPhone = String(req.params.phone).trim().replace(/\D/g, '');
-    const userOrders = await Order.find({ phone: cleanPhone }).sort({ createdAt: -1 });
+    const cleanPhone = String(req.params.phone || '').trim().replace(/\D/g, '').slice(-10);
+    const userOrders = await Order.find({
+      phone: { $regex: cleanPhone + '$' }
+    }).sort({ createdAt: -1 });
     return res.json(userOrders);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
