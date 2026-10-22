@@ -9,6 +9,24 @@ const ADMIN_PHONE = '7379434080';
 const ADMIN_UPI = 'ankit917379@okhdfcbank';
 const ADMIN_SECRET_PIN = '9173';
 
+// High-visibility input styling for Android and Laptop (Immune to OS Dark Mode)
+const highContrastInputStyle = {
+  width: '100%',
+  padding: '12px 14px',
+  borderRadius: '10px',
+  border: '2px solid #cbd5e1',
+  backgroundColor: '#ffffff',
+  color: '#0f172a',
+  WebkitTextFillColor: '#0f172a',
+  caretColor: '#ea580c',
+  fontSize: '15px',
+  fontWeight: '600',
+  boxSizing: 'border-box',
+  outline: 'none',
+  transition: 'border-color 0.2s',
+  display: 'block'
+};
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try {
@@ -74,7 +92,7 @@ export default function App() {
   const categories = ['All', 'Thali & Meals', 'Curry & Sabzi', 'Breads & Rice', 'Snacks', 'Desserts'];
   const isAdmin = user && user.isAdmin;
 
-  // Auto-fill form and clean phone identifier
+  // Sync customer phone upon login
   useEffect(() => {
     if (user) {
       const p = (user.phone || user.identifier || '').replace(/\D/g, '');
@@ -120,7 +138,7 @@ export default function App() {
     if (res.ok && res.data && res.data.pendingDishes) setAuditQueue(res.data);
   };
 
-  // Sync orders for Admin & Customer History directly from MongoDB
+  // Sync orders for Admin & Customer History
   const fetchOrders = async () => {
     if (isAdmin) {
       const res = await safeFetchJson(`${API_BASE}/api/orders?ts=` + Date.now());
@@ -252,13 +270,17 @@ export default function App() {
 
     setSlotModalOrder(null);
 
-    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/approve`, {
+    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/approve`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deliverySlot: finalSlot })
     });
 
-    fetchOrders();
+    if (res.ok) {
+      fetchOrders();
+    } else {
+      alert('Network issue approving order. Please try again.');
+    }
   };
 
   // ADMIN REJECTS UNPAID ORDER
@@ -270,13 +292,17 @@ export default function App() {
       cancellationReason: 'Payment was not credited to Admin bank account'
     } : o));
 
-    await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
+    const res = await safeFetchJson(`${API_BASE}/api/orders/${orderId}/reject`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason: 'Payment was not credited to Admin bank account' })
     });
 
-    fetchOrders();
+    if (res.ok) {
+      fetchOrders();
+    } else {
+      alert('Network issue rejecting order. Please try again.');
+    }
   };
 
   // ADVANCE FOOD STATUS OR DELIVER
@@ -292,16 +318,20 @@ export default function App() {
     fetchOrders();
   };
 
-  // GUARANTEED PURGE OF REJECTED ORDERS FROM MONGODB
+  // PERMANENT PURGE OF REJECTED ORDERS
   const handleClearAllRejected = async () => {
     setOrders(prev => prev.filter(o => o.status !== 'Rejected' && o.status !== 'Cancelled'));
 
-    await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
+    const res = await safeFetchJson(`${API_BASE}/api/clear-all-rejected-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
 
-    fetchOrders();
+    if (res.ok) {
+      fetchOrders();
+    } else {
+      alert('Error clearing rejected orders from database.');
+    }
   };
 
   const handleAuditDecision = async (dishId, decision) => {
@@ -415,7 +445,7 @@ export default function App() {
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.price * curr.qty, 0);
 
-  // USER SUBMITS ORDER (Saved directly to MongoDB before launching UPI)
+  // USER SUBMITS ORDER
   const handleInitiatePayment = async (e) => {
     e.preventDefault();
     if (cart.length === 0) return;
@@ -449,8 +479,7 @@ export default function App() {
       setCart([]);
       setOrderModalOpen(false);
 
-      // Add to user history immediately
-      setUserHistory(prev => [createdOrder, ...prev]);
+      setUserHistory(prev => [createdOrder, ...prev.filter(o => o.orderId !== createdOrder.orderId)]);
       setActiveTab('history');
       fetchOrders();
 
@@ -471,7 +500,7 @@ export default function App() {
 
   const latestUserOrder = userHistory.length > 0 ? userHistory[0] : null;
 
-  // Broad filtering ensuring all unapproved orders show in Admin without dropping
+  // Real-time categorized order lists for Admin
   const pendingOrders = orders.filter(o => 
     !o.paymentConfirmed && 
     o.status !== 'Rejected' && 
@@ -551,7 +580,7 @@ export default function App() {
                     placeholder="e.g. Rahul Sharma"
                     value={loginName}
                     onChange={e => setLoginName(e.target.value)}
-                    style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                    style={highContrastInputStyle}
                   />
                 </div>
 
@@ -566,7 +595,7 @@ export default function App() {
                       placeholder="e.g. 9876543210"
                       value={loginPhone}
                       onChange={e => setLoginPhone(e.target.value.replace(/\D/g, ''))}
-                      style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                      style={highContrastInputStyle}
                     />
                   </div>
                 ) : (
@@ -578,7 +607,7 @@ export default function App() {
                       placeholder="name@gmail.com"
                       value={loginEmail}
                       onChange={e => setLoginEmail(e.target.value)}
-                      style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #d4d5d9', fontSize: 14, boxSizing: 'border-box', outline: 'none' }}
+                      style={highContrastInputStyle}
                     />
                   </div>
                 )}
@@ -617,7 +646,7 @@ export default function App() {
                   placeholder={isAdminLoginAttempt ? 'Enter Admin PIN' : '• • • • • •'}
                   value={enteredCode}
                   onChange={e => setEnteredCode(e.target.value)}
-                  style={{ width: '100%', padding: '14px', borderRadius: 10, border: '2px solid #fc8019', fontSize: 22, textAlign: 'center', letterSpacing: 4, fontWeight: 900, boxSizing: 'border-box', outline: 'none' }}
+                  style={{ ...highContrastInputStyle, padding: '14px', border: '2px solid #fc8019', fontSize: 22, textAlign: 'center', letterSpacing: 4, fontWeight: 900 }}
                 />
               </div>
 
@@ -900,11 +929,11 @@ export default function App() {
                 placeholder="Search for dishes, thalis, desserts..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                style={{ flex: 1, padding: '11px 16px', borderRadius: 12, border: '1px solid #e2e8f0', backgroundColor: '#ffffff', fontSize: 14, outline: 'none', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}
+                style={{ ...highContrastInputStyle, flex: 1, padding: '11px 16px' }}
               />
               <button
                 onClick={() => setFilterVegOnly(!filterVegOnly)}
-                style={{ padding: '8px 14px', borderRadius: 12, border: `2px solid ${filterVegOnly ? '#0f8a65' : '#e2e8f0'}`, backgroundColor: filterVegOnly ? '#eaf8f2' : '#ffffff', color: filterVegOnly ? '#0f8a65' : '#3d4152', fontWeight: 800, cursor: 'pointer', fontSize: 12 }}>
+                style={{ padding: '8px 14px', borderRadius: 12, border: `2px solid ${filterVegOnly ? '#0f8a65' : '#cbd5e1'}`, backgroundColor: filterVegOnly ? '#eaf8f2' : '#ffffff', color: filterVegOnly ? '#0f8a65' : '#3d4152', fontWeight: 800, cursor: 'pointer', fontSize: 12 }}>
                 🟢 Veg
               </button>
             </div>
@@ -1102,7 +1131,7 @@ export default function App() {
               )}
             </div>
 
-            {/* 3. REJECTED ORDERS SECTION WITH PURGE ALL */}
+            {/* 3. REJECTED ORDERS SECTION WITH RELIABLE PURGE */}
             <div style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.04)', borderTop: '4px solid #ef4444' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
@@ -1114,7 +1143,7 @@ export default function App() {
                 {rejectedOrders.length > 0 && (
                   <button
                     onClick={handleClearAllRejected}
-                    style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #ef4444', backgroundColor: '#fee2e2', color: '#b91c1c', fontSize: 11, fontWeight: 900, cursor: 'pointer' }}>
+                    style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #ef4444', backgroundColor: '#fee2e2', color: '#b91c1c', fontSize: 12, fontWeight: 900, cursor: 'pointer' }}>
                     🗑️ Clear All Rejected Orders
                   </button>
                 )}
@@ -1125,10 +1154,10 @@ export default function App() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {rejectedOrders.map(order => (
-                    <div key={order.orderId} style={{ border: '1px solid #fecaca', borderRadius: 8, padding: 10, backgroundColor: '#fef2f2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div key={order.orderId} style={{ border: '1px solid #fecaca', borderRadius: 8, padding: 12, backgroundColor: '#fef2f2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ fontSize: 12, color: '#991b1b' }}>
                         <strong>#{order.orderId}</strong> — {order.customerName} ({order.phone}) • ₹{order.totalAmount}
-                        <div style={{ fontSize: 10, color: '#7f1d1d', marginTop: 2 }}>❌ Rejected: Payment not received</div>
+                        <div style={{ fontSize: 11, color: '#7f1d1d', marginTop: 3 }}>❌ Rejected: Payment not received</div>
                       </div>
                     </div>
                   ))}
@@ -1150,17 +1179,17 @@ export default function App() {
               <form onSubmit={handlePartnerUpload} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Dish Name *</label>
-                  <input required type="text" placeholder="e.g. Special Paneer Thali" value={newDish.name} onChange={e => setNewDish({ ...newDish, name: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                  <input required type="text" placeholder="e.g. Special Paneer Thali" value={newDish.name} onChange={e => setNewDish({ ...newDish, name: e.target.value })} style={highContrastInputStyle} />
                 </div>
 
                 <div style={{ display: 'flex', gap: 10 }}>
                   <div style={{ flex: 1 }}>
                     <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Price (₹) *</label>
-                    <input required type="number" placeholder="80" value={newDish.price} onChange={e => setNewDish({ ...newDish, price: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                    <input required type="number" placeholder="80" value={newDish.price} onChange={e => setNewDish({ ...newDish, price: e.target.value })} style={highContrastInputStyle} />
                   </div>
                   <div style={{ flex: 1 }}>
                     <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Category</label>
-                    <select value={newDish.category} onChange={e => setNewDish({ ...newDish, category: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }}>
+                    <select value={newDish.category} onChange={e => setNewDish({ ...newDish, category: e.target.value })} style={highContrastInputStyle}>
                       {categories.filter(c => c !== 'All').map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
@@ -1168,7 +1197,7 @@ export default function App() {
 
                 <div>
                   <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Dietary Type</label>
-                  <select value={newDish.isVeg ? 'veg' : 'nonveg'} onChange={e => setNewDish({ ...newDish, isVeg: e.target.value === 'veg' })} style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }}>
+                  <select value={newDish.isVeg ? 'veg' : 'nonveg'} onChange={e => setNewDish({ ...newDish, isVeg: e.target.value === 'veg' })} style={highContrastInputStyle}>
                     <option value="veg">🟢 Pure Veg</option>
                     <option value="nonveg">🔴 Non-Veg</option>
                   </select>
@@ -1191,7 +1220,7 @@ export default function App() {
 
                 <div>
                   <label style={{ display: 'block', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>Description</label>
-                  <textarea rows={2} placeholder="Ingredients, recipe details..." value={newDish.description} onChange={e => setNewDish({ ...newDish, description: e.target.value })} style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                  <textarea rows={2} placeholder="Ingredients, recipe details..." value={newDish.description} onChange={e => setNewDish({ ...newDish, description: e.target.value })} style={highContrastInputStyle} />
                 </div>
 
                 <button type="submit" style={{ backgroundColor: '#fc8019', color: '#fff', border: 'none', padding: 12, borderRadius: 8, fontSize: 13, fontWeight: 900, cursor: 'pointer' }}>
@@ -1284,10 +1313,10 @@ export default function App() {
         </div>
       )}
 
-      {/* REDESIGNED ADDRESS & PAYMENT MODAL */}
+      {/* REDESIGNED ADDRESS & PAYMENT MODAL (HIGH VISIBILITY INPUTS) */}
       {orderModalOpen && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 14 }}>
-          <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 440, padding: 22, maxHeight: '92vh', overflowY: 'auto', border: '2px solid #fed7aa', boxShadow: '0 20px 40px rgba(252,128,25,0.18)' }}>
+          <div style={{ backgroundColor: '#ffffff', borderRadius: 20, width: '100%', maxWidth: 440, padding: 22, maxHeight: '92vh', overflowY: 'auto', border: '2px solid #fed7aa', boxShadow: '0 20px 40px rgba(0,0,0,0.2)' }}>
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1.5px solid #fff2eb', paddingBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1303,34 +1332,34 @@ export default function App() {
             <form onSubmit={handleInitiatePayment}>
               <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
                 <div style={{ flex: 1.2 }}>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#334155', marginBottom: 4 }}>Full Name</label>
-                  <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>Full Name</label>
+                  <input required type="text" placeholder="e.g. Rahul Sharma" value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} style={highContrastInputStyle} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#334155', marginBottom: 4 }}>Mobile Number</label>
-                  <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>Mobile Number</label>
+                  <input required type="tel" maxLength={10} pattern="[0-9]{10}" placeholder="10-digit number" value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value.replace(/\D/g, '') })} style={highContrastInputStyle} />
                 </div>
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#ea580c', marginBottom: 4 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 900, color: '#c2410c', marginBottom: 4 }}>
                   🏙️ Delivery Area / Locality / Sector *
                 </label>
-                <input required type="text" placeholder="e.g. Sector 62 / Raj Nagar / Shastri Nagar" value={customerForm.deliveryArea} onChange={e => setCustomerForm({ ...customerForm, deliveryArea: e.target.value })} style={{ width: '100%', padding: '11px 12px', borderRadius: 10, border: '2px solid #fdba74', backgroundColor: '#fff7ed', boxSizing: 'border-box', fontSize: 13, color: '#9a3412', fontWeight: 800, outline: 'none' }} />
+                <input required type="text" placeholder="e.g. Sector 62 / Raj Nagar / Shastri Nagar" value={customerForm.deliveryArea} onChange={e => setCustomerForm({ ...customerForm, deliveryArea: e.target.value })} style={{ ...highContrastInputStyle, border: '2px solid #ea580c' }} />
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#1e293b', marginBottom: 4 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 900, color: '#0f172a', marginBottom: 4 }}>
                   🏠 Complete House / Flat / Street Address *
                 </label>
-                <textarea required rows={2} placeholder="Flat no., building name, street..." value={customerForm.address} onChange={e => setCustomerForm({ ...customerForm, address: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #cbd5e1', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+                <textarea required rows={2} placeholder="Flat no., building name, street..." value={customerForm.address} onChange={e => setCustomerForm({ ...customerForm, address: e.target.value })} style={highContrastInputStyle} />
               </div>
 
               <div style={{ marginBottom: 14 }}>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: '#1e293b', marginBottom: 4 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 900, color: '#0f172a', marginBottom: 4 }}>
                   🚩 Nearest Landmark / Famous Shop *
                 </label>
-                <input required type="text" placeholder="e.g. Near City Hospital / Opp. Bank" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #cbd5e1', backgroundColor: '#f8fafc', boxSizing: 'border-box', fontSize: 13, outline: 'none' }} />
+                <input required type="text" placeholder="e.g. Near City Hospital / Opp. Bank" value={customerForm.landmark} onChange={e => setCustomerForm({ ...customerForm, landmark: e.target.value })} style={highContrastInputStyle} />
               </div>
 
               <div style={{ backgroundColor: '#fff7ed', border: '1.5px solid #fdba74', borderRadius: 12, padding: 14, marginBottom: 16 }}>
@@ -1394,7 +1423,7 @@ export default function App() {
                 placeholder="e.g. 1:15 PM - 1:45 PM"
                 value={customSlotInput}
                 onChange={e => setCustomSlotInput(e.target.value)}
-                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #ccc', boxSizing: 'border-box', fontSize: 13 }}
+                style={highContrastInputStyle}
               />
             </div>
 
